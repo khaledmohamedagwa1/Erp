@@ -161,7 +161,7 @@ public class AccountingDomainTests
     [Fact]
     public void Template_maps_every_posting_role_to_a_posting_account()
     {
-        PostingRoles.All.Count.ShouldBe(45);
+        PostingRoles.All.Count.ShouldBe(54);
         foreach (var role in PostingRoles.All)
         {
             GenericChartTemplate.RoleAccounts.ShouldContainKey(role);

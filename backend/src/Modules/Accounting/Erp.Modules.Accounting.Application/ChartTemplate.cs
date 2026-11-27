@@ -19,6 +19,7 @@ public static class GenericChartTemplate
         new("1110", "11", "Cash on hand", "النقدية بالصندوق", AccountType.Asset, true),
         new("1120", "11", "Banks – current accounts", "البنوك – حسابات جارية", AccountType.Asset, true),
         new("1130", "11", "Internal transfers clearing", "حساب وسيط التحويلات الداخلية", AccountType.Asset, true),
+        new("1140", "11", "Card and wallet clearing", "حساب وسيط البطاقات والمحافظ", AccountType.Asset, true),
         new("1210", "11", "Trade receivables", "العملاء – ذمم مدينة", AccountType.Asset, true, ControlSubledger.Receivables),
         new("1220", "11", "Withholding tax receivable", "ضريبة الخصم المستحقة لنا", AccountType.Asset, true),
         new("1310", "11", "Inventory", "المخزون", AccountType.Asset, true, ControlSubledger.Inventory),
@@ -40,11 +41,13 @@ public static class GenericChartTemplate
         new("2320", "21", "Withholding tax payable", "ضريبة الخصم والإضافة المستحقة", AccountType.Liability, true),
         new("2410", "21", "Accrued expenses", "مصروفات مستحقة", AccountType.Liability, true),
         new("2420", "21", "Landed cost clearing", "حساب وسيط تكاليف الاستيراد", AccountType.Liability, true),
+        new("2430", "21", "Commissions payable", "عمولات مستحقة", AccountType.Liability, true),
 
         new("3", null, "Equity", "حقوق الملكية", AccountType.Equity, false),
         new("3100", "3", "Share capital", "رأس المال", AccountType.Equity, true),
         new("3200", "3", "Retained earnings", "الأرباح المحتجزة", AccountType.Equity, true),
         new("3300", "3", "Opening balance equity", "أرصدة افتتاحية", AccountType.Equity, true),
+        new("3400", "3", "Asset revaluation reserve", "فائض إعادة تقييم الأصول", AccountType.Equity, true),
 
         new("4", null, "Revenue", "الإيرادات", AccountType.Revenue, false),
         new("4110", "4", "Sales revenue – goods", "إيرادات مبيعات البضاعة", AccountType.Revenue, true),
@@ -75,6 +78,12 @@ public static class GenericChartTemplate
         new("5710", "5", "Applied labour (production)", "عمالة محملة على الإنتاج", AccountType.Expense, true),
         new("5720", "5", "Applied machine cost (production)", "تكلفة آلات محملة على الإنتاج", AccountType.Expense, true),
         new("5730", "5", "Applied overhead (production)", "تكاليف غير مباشرة محملة على الإنتاج", AccountType.Expense, true),
+        new("5740", "5", "Under/over-absorbed production cost", "فروق تحميل تكاليف الإنتاج", AccountType.Expense, true),
+        new("5170", "5", "Material usage variance", "انحراف استخدام المواد", AccountType.Expense, true),
+        new("5180", "5", "Conversion cost variance", "انحراف تكاليف التحويل", AccountType.Expense, true),
+        new("5330", "5", "Sales commissions", "عمولات المبيعات", AccountType.Expense, true),
+        new("5430", "5", "Cash rounding differences", "فروق تقريب النقدية", AccountType.Expense, true),
+        new("5520", "5", "Impairment loss on assets", "خسائر انخفاض قيمة الأصول", AccountType.Expense, true),
     ];
 
     /// <summary>
@@ -90,6 +99,7 @@ public static class GenericChartTemplate
         ["3100"] = CashFlowCategory.Financing,
         ["3200"] = CashFlowCategory.Financing,
         ["3300"] = CashFlowCategory.Financing,
+        ["3400"] = CashFlowCategory.None, // revaluation reserve is non-cash
     };
 
     public static CashFlowCategory CategoryFor(TemplateAccount account) =>
@@ -133,6 +143,15 @@ public static class GenericChartTemplate
         [PostingRoles.BankAccount] = "1120",
         [PostingRoles.BankCharges] = "5410",
         [PostingRoles.CashOverShort] = "5420",
+        [PostingRoles.CashRounding] = "5430",
+        [PostingRoles.CardClearing] = "1140",
+        [PostingRoles.AssetRevaluationReserve] = "3400",
+        [PostingRoles.ImpairmentLoss] = "5520",
+        [PostingRoles.CommissionExpense] = "5330",
+        [PostingRoles.CommissionPayable] = "2430",
+        [PostingRoles.MaterialUsageVariance] = "5170",
+        [PostingRoles.ConversionCostVariance] = "5180",
+        [PostingRoles.AbsorptionVariance] = "5740",
         [PostingRoles.InternalTransferClearing] = "1130",
         [PostingRoles.RealizedFxGain] = "4920",
         [PostingRoles.RealizedFxLoss] = "5610",

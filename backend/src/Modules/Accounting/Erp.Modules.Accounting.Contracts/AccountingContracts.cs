@@ -55,6 +55,17 @@ public static class PostingRoles
     public const string AssetDisposalGainLoss = nameof(AssetDisposalGainLoss);
     public const string RetainedEarnings = nameof(RetainedEarnings);
 
+    // Added for the limitation-closing waves (POS, fixed assets, commissions, standard costing).
+    public const string CashRounding = nameof(CashRounding);
+    public const string CardClearing = nameof(CardClearing);
+    public const string AssetRevaluationReserve = nameof(AssetRevaluationReserve);
+    public const string ImpairmentLoss = nameof(ImpairmentLoss);
+    public const string CommissionExpense = nameof(CommissionExpense);
+    public const string CommissionPayable = nameof(CommissionPayable);
+    public const string MaterialUsageVariance = nameof(MaterialUsageVariance);
+    public const string ConversionCostVariance = nameof(ConversionCostVariance);
+    public const string AbsorptionVariance = nameof(AbsorptionVariance);
+
     public static readonly IReadOnlyList<string> All = typeof(PostingRoles)
         .GetFields(BindingFlags.Public | BindingFlags.Static)
         .Where(f => f.IsLiteral && f.FieldType == typeof(string))
