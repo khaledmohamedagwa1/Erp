@@ -4,6 +4,7 @@ using Erp.Modules.Configuration.Infrastructure;
 using Erp.Modules.Identity.Infrastructure;
 using Erp.Modules.Organization.Application;
 using Erp.Modules.Organization.Infrastructure;
+using Erp.Modules.Parties.Infrastructure;
 using Erp.Web;
 using Erp.Web.Modules;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,7 +19,7 @@ var command = args.FirstOrDefault() ?? "migrate";
 var options = ParseOptions(args.Skip(1).ToArray());
 
 var builder = Host.CreateApplicationBuilder(args);
-IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule()];
+IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule(), new PartiesModule()];
 builder.Services.AddErpPlatform(builder.Configuration, modules);
 using var host = builder.Build();
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Erp.Migrator");
