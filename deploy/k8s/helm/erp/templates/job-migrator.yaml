@@ -1,0 +1,52 @@
+{{- if .Values.migrations.enabled }}
+# Explicit migration step (ADR-015): runs before new pods on install and upgrade. A failed or refused (destructive)
+# migration fails the release and the old pods keep serving.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "erp.fullname" . }}-migrate-{{ .Release.Revision }}
+  labels:
+    {{- include "erp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrator
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "erp.selectorLabels" (dict "root" . "component" "migrator") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrator
+          image: {{ include "erp.image" (dict "root" . "image" .Values.migrator.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - migrate
+            {{- if .Values.migrations.allowDestructive }}
+            - --allow-destructive
+            {{- end }}
+          env:
+            - name: DOTNET_ENVIRONMENT
+              value: {{ .Values.config.environment | quote }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "erp.volumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "erp.secretVolume" . | nindent 8 }}
+{{- end }}

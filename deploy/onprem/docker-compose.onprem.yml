@@ -1,0 +1,143 @@
+# On-premises production stack. Installed by scripts/install.sh into ERP_HOME (default /opt/erp); do not run by hand
+# before install.sh has generated .env and secrets/.
+#
+#   docker compose -f docker-compose.onprem.yml --env-file .env up -d                     # proxy + api + worker
+#   docker compose ... --profile bundled-sql up -d                                       # + SQL Server container
+#   docker compose ... --profile migrate run --rm migrator migrate                       # explicit migration step
+#
+# Layout under ERP_HOME (created by install.sh):
+#   .env (0600)  secrets/ (0700, files 0400 owned by uid 1654)  certs/tls.crt + tls.key (customer certificate)
+#   nginx/  data/files/  data/sql/ (bundled SQL only)  backups/
+name: erp
+
+x-erp-image: &erp-image ${ERP_REGISTRY:-}erp-api:${ERP_VERSION:?set ERP_VERSION in .env}
+
+x-erp-common: &erp-common
+  image: *erp-image
+  read_only: true
+  tmpfs: ["/tmp"]
+  user: "1654:1654"
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  restart: unless-stopped
+  volumes:
+    - ./secrets:/run/secrets:ro
+    - ./data/files:/var/lib/erp/files
+  networks: [erp]
+  logging: &erp-logging
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+x-erp-env: &erp-env
+  ASPNETCORE_ENVIRONMENT: Production
+  ASPNETCORE_HTTP_PORTS: "8080"
+  Auth__SecureCookies: "true"
+  Database__AutoMigrate: "false"
+  Hosting__TrustForwardedHeaders: "true"
+  Hosting__KnownNetworks__0: ${ERP_SUBNET:-172.28.0.0/24}
+  Hosting__CorsAllowedOrigins__0: ${ERP_PUBLIC_ORIGIN:?set ERP_PUBLIC_ORIGIN in .env}
+  Serilog__MinimumLevel__Default: ${ERP_LOG_LEVEL:-Information}
+  # ConnectionStrings__Erp, Auth__SigningKeyPem and Platform__ApiKey come from files in ./secrets (key-per-file).
+
+services:
+  proxy:
+    image: ${ERP_NGINX_IMAGE:-nginx:1.27-alpine}
+    ports:
+      - "${ERP_HTTP_PORT:-80}:8080"
+      - "${ERP_HTTPS_PORT:-443}:8443"
+    environment:
+      ERP_PUBLIC_ORIGIN: ${ERP_PUBLIC_ORIGIN:?set ERP_PUBLIC_ORIGIN in .env}
+      NGINX_ENVSUBST_OUTPUT_DIR: /tmp
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/security-headers.conf:/etc/nginx/security-headers.conf:ro
+      - ./nginx/redirect.conf.template:/etc/nginx/templates/redirect.conf.template:ro
+      - ./certs:/etc/nginx/certs:ro
+    tmpfs: ["/var/cache/nginx", "/var/run", "/tmp"]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/nginx-health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256m }
+    restart: unless-stopped
+    networks: [erp]
+    logging: *erp-logging
+
+  api:
+    <<: *erp-common
+    environment:
+      <<: *erp-env
+      Erp__Role: api
+    deploy:
+      resources:
+        limits: { cpus: "${ERP_API_CPUS:-2.0}", memory: "${ERP_API_MEMORY:-2g}" }
+        reservations: { memory: 512m }
+
+  worker:
+    <<: *erp-common
+    environment:
+      <<: *erp-env
+      Erp__Role: worker
+    deploy:
+      resources:
+        limits: { cpus: "${ERP_WORKER_CPUS:-1.0}", memory: "${ERP_WORKER_MEMORY:-1g}" }
+        reservations: { memory: 256m }
+
+  # One-shot, explicit, approval-gated (ADR-015). Never started by `up`; run through scripts/install.sh / upgrade.sh.
+  migrator:
+    profiles: ["migrate"]
+    image: ${ERP_REGISTRY:-}erp-migrator:${ERP_VERSION:?set ERP_VERSION in .env}
+    read_only: true
+    tmpfs: ["/tmp"]
+    user: "1654:1654"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      DOTNET_ENVIRONMENT: Production
+      ERP_INIT_ADMIN_PASSWORD: ${ERP_INIT_ADMIN_PASSWORD:-}
+    volumes:
+      - ./secrets:/run/secrets:ro
+    command: ["migrate"]
+    restart: "no"
+    networks: [erp]
+    logging: *erp-logging
+
+  # Optional bundled database (profile bundled-sql). Customers with an existing SQL Server put its connection
+  # string in secrets/ConnectionStrings__Erp instead. Not published on the host: reachable only on the erp network.
+  sqlserver:
+    profiles: ["bundled-sql"]
+    image: ${ERP_SQL_IMAGE:-mcr.microsoft.com/mssql/server:2022-latest}
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: ${MSSQL_PID:-Express}
+      MSSQL_SA_PASSWORD: ${SQL_SA_PASSWORD:-}
+      MSSQL_BACKUP_DIR: /var/opt/mssql/backup
+    volumes:
+      - ./data/sql:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { memory: "${ERP_SQL_MEMORY:-4g}" }
+    restart: unless-stopped
+    networks: [erp]
+    logging: *erp-logging
+
+networks:
+  erp:
+    ipam:
+      config:
+        - subnet: ${ERP_SUBNET:-172.28.0.0/24}

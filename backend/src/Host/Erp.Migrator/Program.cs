@@ -31,6 +31,9 @@ var command = args.FirstOrDefault() ?? "migrate";
 var options = ParseOptions(args.Skip(1).ToArray());
 
 var builder = Host.CreateApplicationBuilder(args);
+
+// Secret files (Docker/Kubernetes secrets): /run/secrets/ConnectionStrings__Erp becomes ConnectionStrings:Erp.
+builder.Configuration.AddKeyPerFile(Environment.GetEnvironmentVariable("ERP_SECRETS_DIR") ?? "/run/secrets", optional: true);
 IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule(), new PartiesModule(), new TaxModule(), new CatalogModule(), new AccountingModule(), new FinanceModule(), new InventoryModule(), new WorkflowModule(), new ManufacturingModule(), new ProcurementModule(), new SalesModule(), new FixedAssetsModule(), new PosModule(), new ReportingModule()];
 builder.Services.AddErpPlatform(builder.Configuration, modules);
 using var host = builder.Build();
@@ -52,7 +55,7 @@ try
                     Required(options, "code"), Required(options, "name"), Required(options, "company-code"),
                     Required(options, "company-name-en"), Required(options, "company-name-ar"), Required(options, "currency"),
                     options.GetValueOrDefault("preset", "trading"), Required(options, "admin-email"),
-                    options.GetValueOrDefault("admin-name", "Administrator"), Required(options, "admin-password")));
+                    options.GetValueOrDefault("admin-name", "Administrator"), AdminPassword(options)));
                 if (result.IsFailure)
                 {
                     logger.LogError("Tenant was not created: {Code} {Message}", result.Error.Code, result.Error.Message);
@@ -94,3 +97,9 @@ static Dictionary<string, string> ParseOptions(string[] args)
 
 static string Required(Dictionary<string, string> options, string key) =>
     options.TryGetValue(key, out var value) ? value : throw new ArgumentException($"--{key} is required.");
+
+// Prefer ERP_INIT_ADMIN_PASSWORD so the password does not appear in the process list or shell history.
+static string AdminPassword(Dictionary<string, string> options) =>
+    Environment.GetEnvironmentVariable("ERP_INIT_ADMIN_PASSWORD") is { Length: > 0 } fromEnvironment
+        ? fromEnvironment
+        : Required(options, "admin-password");

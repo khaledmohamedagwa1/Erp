@@ -62,6 +62,8 @@ public static class DependencyInjection
         services.AddSingleton<EventTypeRegistry>();
         services.AddSingleton<IOutboxProcessor, OutboxProcessor>();
         services.AddSingleton<ErpDatabaseMigrator>();
+        services.AddSingleton<IPendingMigrationsReader, PendingMigrationsReader>();
+        services.AddSingleton<IOutboxLagReader, OutboxLagReader>();
 
         services.AddErpDbContext<PlatformDbContext>(PlatformDbContext.SchemaName, order: 0, hasOutbox: false);
         return services;

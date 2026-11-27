@@ -76,6 +76,9 @@ public sealed class ErpApiFixture : IAsyncLifetime
 {
     public const string PlatformKey = "test-platform-key";
 
+    /// <summary>The browser origin allowed by CORS in tests (the Angular app's origin in a real deployment).</summary>
+    public const string AllowedOrigin = "https://app.erp.test";
+
     private MsSqlContainer? _container;
     private WebApplicationFactory<Program>? _factory;
 
@@ -105,7 +108,7 @@ public sealed class ErpApiFixture : IAsyncLifetime
             builder.UseSetting("RateLimiting:AuthPerMinute", "10000");
             builder.UseSetting("Serilog:MinimumLevel:Default", "Warning");
             builder.UseSetting("OpenApi:Enabled", "true");
-            builder.ConfigureTestServices(services =>
+            builder.UseSetting("Hosting:CorsAllowedOrigins:0", AllowedOrigin);            builder.ConfigureTestServices(services =>
             {
                 services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedRecorder>();
                 services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedInboxCounter>();

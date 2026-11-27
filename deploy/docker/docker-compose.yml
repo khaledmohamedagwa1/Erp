@@ -1,48 +1,73 @@
-# Local development / evaluation stack. Copy .env.example to .env and set real values first.
+# Local development / evaluation stack (NOT for production — see deploy/onprem for that).
+#   cp deploy/docker/.env.example deploy/docker/.env   # then set SQL_SA_PASSWORD
 #   docker compose -f deploy/docker/docker-compose.yml --env-file deploy/docker/.env up --build
-name: erp
+# The migrator is a one-shot that only runs when you ask for it (explicit, ADR-015):
+#   docker compose -f deploy/docker/docker-compose.yml --env-file deploy/docker/.env --profile migrate run --rm migrator
+name: erp-dev
+
+x-erp-connection: &erp-connection "Server=sqlserver,1433;Database=${ERP_DATABASE:-Erp};User Id=sa;Password=${SQL_SA_PASSWORD:?set SQL_SA_PASSWORD in .env};TrustServerCertificate=True;Encrypt=True"
+
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: ${SQL_SA_PASSWORD:?set SQL_SA_PASSWORD in .env}
+      MSSQL_PID: ${MSSQL_PID:-Developer}
     ports:
-      - "1433:1433"
+      - "${SQL_PORT:-1433}:1433"
     volumes:
       - sqldata:/var/opt/mssql
     healthcheck:
-      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' || exit 1"]
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
       interval: 10s
+      timeout: 5s
       retries: 12
+      start_period: 20s
+    restart: unless-stopped
 
   migrator:
+    profiles: ["migrate"]
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.migrator
+    image: erp-migrator:${ERP_TAG:-local}
+    read_only: true
+    tmpfs: ["/tmp"]
     environment:
-      ConnectionStrings__Erp: "Server=sqlserver,1433;Database=Erp;User Id=sa;Password=${SQL_SA_PASSWORD};TrustServerCertificate=True"
+      ConnectionStrings__Erp: *erp-connection
+    command: ["migrate"]
     depends_on:
       sqlserver:
         condition: service_healthy
+    restart: "no"
 
   api:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.api
+    image: erp-api:${ERP_TAG:-local}
+    read_only: true
+    tmpfs: ["/tmp"]
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
-      ConnectionStrings__Erp: "Server=sqlserver,1433;Database=Erp;User Id=sa;Password=${SQL_SA_PASSWORD};TrustServerCertificate=True"
+      ConnectionStrings__Erp: *erp-connection
       Erp__Role: all
-      Database__AutoMigrate: "false"
+      Database__AutoMigrate: ${DATABASE_AUTOMIGRATE:-false}
       Platform__ApiKey: ${PLATFORM_API_KEY:-}
       Auth__SigningKeyPem: ${AUTH_SIGNING_KEY_PEM:-}
       Auth__SecureCookies: ${AUTH_SECURE_COOKIES:-false}
+      Hosting__CorsAllowedOrigins__0: ${CORS_ORIGIN:-http://localhost:5173}
     ports:
-      - "8080:8080"
+      - "${API_PORT:-8080}:8080"
     depends_on:
-      migrator:
-        condition: service_completed_successfully
+      sqlserver:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    restart: unless-stopped
 
 volumes:
   sqldata:

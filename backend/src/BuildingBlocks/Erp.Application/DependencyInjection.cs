@@ -12,6 +12,7 @@ public static class DependencyInjection
     public static IServiceCollection AddErpApplication(this IServiceCollection services)
     {
         services.AddScoped<IDispatcher, Dispatcher>();
+        services.AddScoped(typeof(IPipelineBehavior<,>), typeof(Observability.MetricsBehavior<,>));
         services.AddScoped(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
         services.AddScoped(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
         services.AddScoped(typeof(IPipelineBehavior<,>), typeof(TransientRetryBehavior<,>));

@@ -10,9 +10,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       sqlserver:
         image: mcr.microsoft.com/mssql/server:2022-latest
@@ -34,13 +39,22 @@ jobs:
       - run: dotnet restore Erp.slnx
       - run: dotnet build Erp.slnx --no-restore -c Release
       - name: Unit tests
-        run: dotnet test --project tests/Erp.UnitTests -c Release --no-build
+        run: dotnet test --project tests/Erp.UnitTests -c Release --no-build --results-directory "$GITHUB_WORKSPACE/test-results/unit" -- --report-xunit-trx
       - name: Architecture tests
-        run: dotnet test --project tests/Erp.ArchitectureTests -c Release --no-build
+        run: dotnet test --project tests/Erp.ArchitectureTests -c Release --no-build --results-directory "$GITHUB_WORKSPACE/test-results/architecture" -- --report-xunit-trx
       - name: Integration tests (SQL Server)
         env:
           ERP_TEST_SQL: "Server=localhost,1433;User Id=sa;Password=Ci_Only_Passw0rd!;TrustServerCertificate=True"
-        run: dotnet test --project tests/Erp.IntegrationTests -c Release --no-build
+        # Two collections at a time: each test class provisions tenants against one SQL Server container.
+        run: dotnet test --project tests/Erp.IntegrationTests -c Release --no-build --results-directory "$GITHUB_WORKSPACE/test-results/integration" -- --report-xunit-trx --max-threads 2
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Check for model changes without a migration
         run: |
           dotnet tool install --global dotnet-ef --version 10.0.15
@@ -48,6 +62,6 @@ jobs:
                      "src/Modules/Organization/Erp.Modules.Organization.Infrastructure OrganizationDbContext" \
                      "src/Modules/Identity/Erp.Modules.Identity.Infrastructure IdentityDbContext" \
                      "src/Modules/Configuration/Erp.Modules.Configuration.Infrastructure ConfigurationDbContext"; do
-            set -- $ctx
-            dotnet ef migrations has-pending-model-changes -p "$1" -s src/Host/Erp.Migrator -c "$2" --no-build --configuration Release
+            read -r project context <<< "$ctx"
+            dotnet ef migrations has-pending-model-changes -p "$project" -s src/Host/Erp.Migrator -c "$context" --no-build --configuration Release
           done

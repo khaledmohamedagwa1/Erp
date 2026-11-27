@@ -1,0 +1,3 @@
+# Rendered by the nginx image entrypoint (envsubst) into /tmp (tmpfs) at start: redirects to the configured public origin,
+# including a non-default HTTPS port.
+return 301 ${ERP_PUBLIC_ORIGIN}$request_uri;

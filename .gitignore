@@ -14,6 +14,11 @@ TestResults/
 .env
 *.pfx
 appsettings.*.local.json
+# Generated at install time on the customer's machine (deploy/onprem/scripts/install.sh) — never committed
+deploy/**/secrets/
+deploy/**/certs/
+deploy/**/data/
+deploy/**/backups/
 # Node / Angular (frontend, later)
 node_modules/
 dist/

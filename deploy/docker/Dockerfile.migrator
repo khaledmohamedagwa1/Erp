@@ -1,13 +1,29 @@
-# syntax=docker/dockerfile:1
-# Erp.Migrator — run as an explicit deployment step: `migrate` or `init-tenant ...` (ADR-015).
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+# syntax=docker/dockerfile:1.7
+# Erp.Migrator — explicit, approval-gated deployment step (ADR-015):
+#   docker run --rm erp-migrator:<tag> migrate [--allow-destructive]
+#   docker run --rm -e ERP_INIT_ADMIN_PASSWORD=... erp-migrator:<tag> init-tenant --code ACME ...
+# Build from the repository root: docker build -f deploy/docker/Dockerfile.migrator -t erp-migrator:local .
+
+ARG DOTNET_VERSION=10.0
+
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS build
+RUN --mount=type=secret,id=cacert,required=false \
+    if [ -s /run/secrets/cacert ]; then \
+      cp /run/secrets/cacert /usr/local/share/ca-certificates/build-proxy-ca.crt && update-ca-certificates >/dev/null; \
+    fi
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 WORKDIR /src
 COPY backend/ ./
 RUN dotnet restore src/Host/Erp.Migrator/Erp.Migrator.csproj
 RUN dotnet publish src/Host/Erp.Migrator/Erp.Migrator.csproj -c Release -o /app --no-restore /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+# The migrator uses ASP.NET Core components (Data Protection, shared web building block), so it needs the aspnet runtime.
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS runtime
+LABEL org.opencontainers.image.title="erp-migrator" \
+      org.opencontainers.image.description="Modular ERP database migrator and tenant initialiser" \
+      org.opencontainers.image.source="https://github.com/khaledmohamedagwa1/Erp"
 WORKDIR /app
+ENV DOTNET_RUNNING_IN_CONTAINER=true DOTNET_CLI_TELEMETRY_OPTOUT=1
 COPY --from=build /app ./
 USER $APP_UID
 ENTRYPOINT ["dotnet", "Erp.Migrator.dll"]

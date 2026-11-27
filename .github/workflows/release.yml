@@ -1,0 +1,72 @@
+name: release
+
+# On a version tag (v1.2.3) or manually: builds the offline on-prem bundle (images + compose + scripts + runbook)
+# and attaches it to the workflow run as an artifact. The bundle contains no secrets; install.sh generates them.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Bundle version (e.g. 1.2.3)
+        required: true
+      with_sql:
+        description: Include the SQL Server image in the bundle
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  offline-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint the on-prem scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          (cd deploy/onprem/scripts && shellcheck -x ./*.sh)
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${INPUT_VERSION}"
+          fi
+          [[ "${version}" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || { echo "invalid version '${version}'"; exit 1; }
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Build bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          WITH_SQL: ${{ inputs.with_sql && '--with-sql' || '' }}
+        run: |
+          # shellcheck disable=SC2086
+          deploy/onprem/scripts/build-offline-bundle.sh --version "${VERSION}" --output "${RUNNER_TEMP}/dist" ${WITH_SQL}
+
+      - name: Verify bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd "${RUNNER_TEMP}/dist"
+          sha256sum -c "erp-onprem-${VERSION}.tar.gz.sha256"
+          tar -xzf "erp-onprem-${VERSION}.tar.gz"
+          (cd "erp-onprem-${VERSION}" && sha256sum --quiet -c SHA256SUMS)
+          if grep -rIl -- "-----BEGIN .*PRIVATE KEY-----" "erp-onprem-${VERSION}" --exclude-dir=images; then
+            echo "a private key ended up in the bundle"; exit 1
+          fi
+          rm -rf "erp-onprem-${VERSION}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erp-onprem-${{ steps.version.outputs.version }}
+          path: ${{ runner.temp }}/dist/
+          compression-level: 0
+          retention-days: 30

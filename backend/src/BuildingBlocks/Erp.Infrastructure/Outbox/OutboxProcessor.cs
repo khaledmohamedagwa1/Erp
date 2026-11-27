@@ -111,6 +111,8 @@ public sealed class OutboxProcessor(
                 logger.LogWarning(ex, "Outbox message {MessageId} ({Type}) failed", message.Id, message.Type);
             }
 
+            Erp.Application.Observability.ErpMetrics.RecordOutboxMessage(message.Type, error is null);
+
             await using var update = AuditWriter.Command(connection, transaction, $"""
                 UPDATE [{source.Schema}].[OutboxMessage]
                    SET Attempts = Attempts + 1,

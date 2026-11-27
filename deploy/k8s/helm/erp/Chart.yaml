@@ -1,0 +1,11 @@
+apiVersion: v2
+name: erp
+description: Modular ERP (API + background worker, SQL Server external). Secrets are referenced, never stored in values.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+keywords: [erp, accounting, inventory]
+home: https://github.com/khaledmohamedagwa1/Erp
+sources:
+  - https://github.com/khaledmohamedagwa1/Erp
