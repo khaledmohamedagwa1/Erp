@@ -40,3 +40,62 @@ public static class ConfigurationPermissions
     public const string ModuleManage = "configuration.module.manage";
     public const string PolicyManage = "configuration.policy.manage";
 }
+
+/// <summary>
+/// Read-only copies of the business policy sections for other modules (same JSON shape as the Configuration domain records).
+/// Defaults match the decisions log, so a company without a stored section behaves as decided.
+/// </summary>
+public sealed record InventoryPolicySettings
+{
+    public const string Section = "inventory";
+
+    public bool AllowNegativeStock { get; init; }
+
+    public string DefaultCostingMethod { get; init; } = "WeightedAverage";
+
+    public string ValuationArea { get; init; } = "LegalEntity";
+
+    public string BackdatedPostings { get; init; } = "WithinOpenPeriod";
+
+    public bool EnableBatchTracking { get; init; } = true;
+
+    public bool EnableSerialTracking { get; init; } = true;
+
+    public bool EnableExpiryTracking { get; init; } = true;
+
+    public bool EnableReservations { get; init; } = true;
+}
+
+public sealed record SalesPolicySettings
+{
+    public const string Section = "sales";
+
+    public string StockIssueTiming { get; init; } = "AtInvoice";
+
+    public bool EnableCreditLimits { get; init; } = true;
+
+    public string CreditLimitAction { get; init; } = "RequireApproval";
+
+    public bool AllowCreatorToApprove { get; init; }
+}
+
+public sealed record ProcurementPolicySettings
+{
+    public const string Section = "procurement";
+
+    public bool ReceiptBeforeInvoice { get; init; } = true;
+
+    public decimal PriceTolerancePercent { get; init; } = 2m;
+
+    public decimal QuantityTolerancePercent { get; init; }
+}
+
+/// <summary>Reads a company's business policies (any company of the current tenant).</summary>
+public interface IPolicyReader
+{
+    Task<InventoryPolicySettings> GetInventoryPolicyAsync(Guid companyId, CancellationToken cancellationToken = default);
+
+    Task<SalesPolicySettings> GetSalesPolicyAsync(Guid companyId, CancellationToken cancellationToken = default);
+
+    Task<ProcurementPolicySettings> GetProcurementPolicyAsync(Guid companyId, CancellationToken cancellationToken = default);
+}

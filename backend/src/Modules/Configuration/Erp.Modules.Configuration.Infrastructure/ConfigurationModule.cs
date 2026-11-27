@@ -71,6 +71,7 @@ public sealed class ConfigurationModule : IErpModule
         services.AddScoped<IModuleActivationService>(sp => sp.GetRequiredService<ModuleActivationService>());
         services.AddScoped<IModuleActivationCache>(sp => sp.GetRequiredService<ModuleActivationService>());
         services.AddScoped<IConfigurationProvisioning, ConfigurationProvisioning>();
+        services.AddScoped<IPolicyReader, PolicyReader>();
         services.AddHandlersFromAssembly(typeof(IConfigurationDbContext).Assembly);
         services.AddSingleton(new EventAssembly(typeof(CompanyModule).Assembly));
     }

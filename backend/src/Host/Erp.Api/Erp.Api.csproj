@@ -11,6 +11,7 @@
     <ProjectReference Include="../../Modules/Tax/Erp.Modules.Tax.Infrastructure/Erp.Modules.Tax.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Catalog/Erp.Modules.Catalog.Infrastructure/Erp.Modules.Catalog.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Accounting/Erp.Modules.Accounting.Infrastructure/Erp.Modules.Accounting.Infrastructure.csproj" />
+    <ProjectReference Include="../../Modules/Inventory/Erp.Modules.Inventory.Infrastructure/Erp.Modules.Inventory.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Serilog.AspNetCore" />

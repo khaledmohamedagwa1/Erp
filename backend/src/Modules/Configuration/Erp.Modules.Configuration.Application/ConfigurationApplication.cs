@@ -245,3 +245,27 @@ public sealed class UpdatePolicyValidator : AbstractValidator<UpdatePolicyComman
 {
     public UpdatePolicyValidator() => RuleFor(x => x.Section).NotEmpty();
 }
+
+/// <summary>Contract implementation: deserializes a stored policy section; missing sections fall back to defaults.</summary>
+public sealed class PolicyReader(IConfigurationDbContext db, ITenantContext tenant) : IPolicyReader
+{
+    public Task<InventoryPolicySettings> GetInventoryPolicyAsync(Guid companyId, CancellationToken cancellationToken = default) =>
+        ReadAsync<InventoryPolicySettings>(companyId, InventoryPolicySettings.Section, cancellationToken);
+
+    public Task<SalesPolicySettings> GetSalesPolicyAsync(Guid companyId, CancellationToken cancellationToken = default) =>
+        ReadAsync<SalesPolicySettings>(companyId, SalesPolicySettings.Section, cancellationToken);
+
+    public Task<ProcurementPolicySettings> GetProcurementPolicyAsync(Guid companyId, CancellationToken cancellationToken = default) =>
+        ReadAsync<ProcurementPolicySettings>(companyId, ProcurementPolicySettings.Section, cancellationToken);
+
+    private async Task<T> ReadAsync<T>(Guid companyId, string section, CancellationToken cancellationToken)
+        where T : class, new()
+    {
+        var tenantId = tenant.TenantId ?? throw new InvalidOperationException("Tenant context required.");
+        var json = await db.CompanyPolicies.IgnoreQueryFilters().AsNoTracking()
+            .Where(p => EF.Property<Guid>(p, "TenantId") == tenantId && p.CompanyId == companyId && p.Section == section)
+            .Select(p => p.Json)
+            .FirstOrDefaultAsync(cancellationToken);
+        return json is null ? new T() : JsonSerializer.Deserialize<T>(json, PolicyJson.Options) ?? new T();
+    }
+}

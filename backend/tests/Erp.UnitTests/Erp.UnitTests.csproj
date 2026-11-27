@@ -18,6 +18,7 @@
     <ProjectReference Include="../../src/BuildingBlocks/Erp.Infrastructure/Erp.Infrastructure.csproj" />
     <ProjectReference Include="../../src/Modules/Accounting/Erp.Modules.Accounting.Domain/Erp.Modules.Accounting.Domain.csproj" />
     <ProjectReference Include="../../src/Modules/Accounting/Erp.Modules.Accounting.Application/Erp.Modules.Accounting.Application.csproj" />
+    <ProjectReference Include="../../src/Modules/Inventory/Erp.Modules.Inventory.Domain/Erp.Modules.Inventory.Domain.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
