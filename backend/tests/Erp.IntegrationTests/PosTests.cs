@@ -148,10 +148,10 @@ public class PosTests(ErpApiFixture fixture)
         (await OnHandAsync(s)).ShouldBe(18m);
         await BooksReconcileAsync(s);
 
-        // Split payment: change only from cash; non-cash may not exceed the amount due; a card goes to the bank clearing role.
+        // Split payment: change only from cash; non-cash may not exceed the amount due; a card goes to the card clearing role.
         var split = await SellAsync(s, [Line(s.Plate, 1)], [Pay("Card", 100m), Pay("Cash", 20m)]);
         split.GetProperty("change").GetDecimal().ShouldBe(6m);
-        (await RoleAsync(s, PostingRoles.BankAccount)).ShouldBe(100m);
+        (await RoleAsync(s, PostingRoles.CardClearing)).ShouldBe(100m);
         (await RoleAsync(s, PostingRoles.CashAccount)).ShouldBe(299m);
         (await (await SubmitAsync(s, s.Terminal, Guid.NewGuid(), [Line(s.Plate, 1)], [Pay("Card", 120m)])).ErrorCodeAsync()).ShouldBe("pos.overpaid-non-cash");
         (await (await SubmitAsync(s, s.Terminal, Guid.NewGuid(), [Line(s.Plate, 1)], [Pay("Cash", 100m)])).ErrorCodeAsync()).ShouldBe("pos.underpaid");
@@ -273,7 +273,7 @@ public class PosTests(ErpApiFixture fixture)
 
         (await RoleAsync(s, PostingRoles.CashOverShort)).ShouldBe(20m);
         (await RoleAsync(s, PostingRoles.CashAccount)).ShouldBe(114m - 20m);
-        (await RoleAsync(s, PostingRoles.BankAccount)).ShouldBe(114m);
+        (await RoleAsync(s, PostingRoles.CardClearing)).ShouldBe(114m);
 
         var z = await Get(s.T, $"/api/v1/pos/shifts/{s.Shift}/z-report");
         z.GetProperty("reportType").GetString().ShouldBe("Z");

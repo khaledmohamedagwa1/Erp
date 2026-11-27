@@ -61,7 +61,8 @@ public sealed record PurchaseInvoiceLine(
     decimal BaseNet = 0,
     decimal GrniBase = 0,
     decimal VarianceToInventory = 0,
-    decimal VarianceToPpv = 0)
+    decimal VarianceToPpv = 0,
+    decimal FxDifference = 0)
 {
     public decimal TaxAmount => RecoverableTax + NonRecoverableTax;
 

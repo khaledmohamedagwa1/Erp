@@ -100,7 +100,13 @@ public class EInvoicingTests(ErpApiFixture fixture)
         // Disabled by default: nothing is queued.
         (await Get(s, "/api/v1/tax/e-invoicing/settings")).GetProperty("enabled").GetBoolean().ShouldBeFalse();
         var before = await InvoiceAsync(s, buyer, 1);
-        await fixture.Factory.Services.GetRequiredService<IOutboxProcessor>().ProcessPendingAsync(Ct);
+
+        // Drain the shared outbox (other tests' messages may be queued ahead of this invoice's) before e-invoicing is enabled.
+        var drain = fixture.Factory.Services.GetRequiredService<IOutboxProcessor>();
+        for (var i = 0; i < 200 && await drain.ProcessPendingAsync(Ct) > 0; i++)
+        {
+        }
+
         (await Get(s, $"/api/v1/tax/e-invoicing/submissions?sourceDocId={before}")).GetProperty("items").GetArrayLength().ShouldBe(0);
 
         (await (await Send(s, HttpMethod.Put, "/api/v1/tax/e-invoicing/settings", new { enabled = true, provider = "eta" })).ErrorCodeAsync())

@@ -42,11 +42,22 @@ public sealed class InventoryDbContext(DbContextOptions<InventoryDbContext> opti
 
     public DbSet<StockCount> Counts => Set<StockCount>();
 
+    public DbSet<CostLayerAdjustment> CostLayerAdjustments => Set<CostLayerAdjustment>();
+
+    public DbSet<StorageBin> Bins => Set<StorageBin>();
+
+    public DbSet<BinBalance> BinBalances => Set<BinBalance>();
+
+    public DbSet<BinMovement> BinMovements => Set<BinMovement>();
+
+    public DbSet<RecostRun> RecostRuns => Set<RecostRun>();
+
     protected override void ConfigureModel(ModelBuilder modelBuilder)
     {
         // Lines are JSON values, not entities.
         modelBuilder.Ignore<StockDocumentLine>();
         modelBuilder.Ignore<StockCountLine>();
+        modelBuilder.Ignore<RecostCorrection>();
 
         modelBuilder.Entity<InventoryMovement>(b =>
         {
@@ -187,6 +198,66 @@ public sealed class InventoryDbContext(DbContextOptions<InventoryDbContext> opti
             b.Property(x => x.Notes).HasMaxLength(500);
             b.Property(x => x.SnapshotAtUtc).HasPrecision(3);
             Lines(b.Property(x => x.Lines));
+        });
+
+        modelBuilder.Entity<CostLayerAdjustment>(b =>
+        {
+            b.ToTable("CostLayerAdjustment");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.RemainingAtAdjustment).HasPrecision(18, 6);
+            b.Property(x => x.Amount).HasPrecision(19, 4);
+            b.HasIndex(nameof(CostLayerAdjustment.MovementId)).IsUnique();
+            b.HasIndex(nameof(CostLayerAdjustment.LayerId));
+        });
+
+        modelBuilder.Entity<StorageBin>(b =>
+        {
+            b.ToTable("StorageBin");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.Code).HasMaxLength(30).IsRequired();
+            b.Property(x => x.Name).HasMaxLength(100).IsRequired();
+            b.HasIndex(TenantIdProperty, nameof(StorageBin.WarehouseId), nameof(StorageBin.Code)).IsUnique();
+        });
+
+        modelBuilder.Entity<BinBalance>(b =>
+        {
+            b.ToTable("BinBalance");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.Quantity).HasPrecision(18, 6);
+            b.HasIndex(TenantIdProperty, nameof(BinBalance.BinId), nameof(BinBalance.ProductId), nameof(BinBalance.VariantKey), nameof(BinBalance.BatchKey))
+                .IsUnique().HasDatabaseName("UX_BinBalance_Key");
+            b.HasIndex(TenantIdProperty, nameof(BinBalance.WarehouseId), nameof(BinBalance.ProductId));
+        });
+
+        modelBuilder.Entity<BinMovement>(b =>
+        {
+            b.ToTable("BinMovement");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.Quantity).HasPrecision(18, 6);
+            b.Property(x => x.Kind).HasMaxLength(20).IsRequired();
+            b.Property(x => x.SourceDocType).HasMaxLength(50).IsRequired();
+            b.Property(x => x.CreatedAtUtc).HasPrecision(3);
+            b.HasIndex(nameof(BinMovement.InventoryMovementId));
+            b.HasIndex(TenantIdProperty, nameof(BinMovement.BinId));
+        });
+
+        modelBuilder.Entity<RecostRun>(b =>
+        {
+            b.ToTable("RecostRun");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.Trigger).HasConversion<string>().HasMaxLength(20);
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            b.Property(x => x.Reference).HasMaxLength(100);
+            b.Property(x => x.FailureReason).HasMaxLength(500);
+            b.Property(x => x.TotalDifference).HasPrecision(19, 4);
+            b.Property(x => x.CompletedAtUtc).HasPrecision(3);
+            Lines(b.Property(x => x.Corrections));
+            b.HasIndex(TenantIdProperty, nameof(RecostRun.ValuationAreaId), nameof(RecostRun.ProductId), nameof(RecostRun.Status));
         });
     }
 

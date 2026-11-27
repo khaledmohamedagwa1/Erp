@@ -195,8 +195,10 @@ public sealed class StartCloseShiftHandler(IPosDbContext db, IPosLocks locks, IC
 public sealed record CountInput(string Method, decimal Amount);
 
 /// <summary>
-/// Closes the shift with the blind counts (from Open or Closing). The cash variance is posted at once (purpose "over-short"):
-/// shortage Dr CashOverShort / Cr cash; overage Dr cash / Cr CashOverShort. Non-cash variances are reported, not posted.
+/// Closes the shift with the blind counts (from Open or Closing). Variances are posted at once (purpose "over-short"): shortage
+/// Dr CashOverShort / Cr the method's account; overage the reverse. Cash always (an uncounted drawer counts as 0); card, wallet and
+/// other methods only when they were counted (e.g. against the terminal's settlement slip) — their accounts are the card clearing
+/// role or the configured bank accounts.
 /// </summary>
 public sealed record CloseShiftCommand(Guid ShiftId, IReadOnlyList<CountInput> Counts) : ICommand<ShiftDto>;
 
@@ -248,17 +250,24 @@ public sealed class CloseShiftHandler(
             return ex.Error;
         }
 
-        if (variance != 0)
+        _ = variance;
+        var posting = shift.Counts.Where(cnt => cnt.Variance != 0 && (cnt.Method == PaymentMethod.Cash || counted.ContainsKey(cnt.Method))).ToList();
+        if (posting.Count > 0)
         {
-            var cash = (await accounts.ResolveAsync(terminal, ct))[PaymentMethod.Cash];
-            var amount = Math.Abs(variance);
-            var shortage = variance < 0;
-            var lines = new PosJournal()
-                .Add(PostingRoles.CashOverShort, null, shortage ? amount : 0, shortage ? 0 : amount, description: shortage ? "Cash shortage" : "Cash overage")
-                .Add(cash.Role, cash.AccountId, shortage ? 0 : amount, shortage ? amount : 0, description: $"Drawer {terminal.Code}")
-                .Lines;
+            var targets = await accounts.ResolveAsync(terminal, ct);
+            var journal = new PosJournal();
+            foreach (var count in posting)
+            {
+                var target = targets[count.Method];
+                var amount = Math.Abs(count.Variance);
+                var shortage = count.Variance < 0;
+                journal
+                    .Add(PostingRoles.CashOverShort, null, shortage ? amount : 0, shortage ? 0 : amount, description: $"{count.Method} {(shortage ? "shortage" : "overage")}")
+                    .Add(target.Role, target.AccountId, shortage ? 0 : amount, shortage ? amount : 0, description: $"{count.Method} {terminal.Code}");
+            }
+
             var posted = await journals.PostAsync(new JournalRequest(shift.LegalEntityId, shift.BusinessDate, SourceModules.Pos, PosDocumentTypes.Shift, shift.Id,
-                "over-short", $"POS cash over/short {shift.Number}", shift.Currency, 1m, lines), ct);
+                "over-short", $"POS over/short {shift.Number}", shift.Currency, 1m, journal.Lines), ct);
             if (posted.IsFailure)
             {
                 return posted.Error;
@@ -305,8 +314,15 @@ public sealed class ShiftReportHandler(IPosDbContext db, ShiftTotals totals, ICl
             shift.OpenedAtUtc, shift.ClosedAtUtc, sales.Count, refunds.Count, sales.Sum(r => r.GrossTotal), refunds.Sum(r => r.GrossTotal),
             sales.Sum(r => r.NetTotal) - refunds.Sum(r => r.NetTotal), sales.Sum(r => r.TaxTotal) - refunds.Sum(r => r.TaxTotal),
             sales.Sum(r => r.DiscountTotal) - refunds.Sum(r => r.DiscountTotal), sales.Sum(r => r.RoundingAdjustment) - refunds.Sum(r => r.RoundingAdjustment),
-            shift.OpeningFloat, shift.PayIns, shift.PayOuts, methods, shift.CashVariance, shift.VarianceJournalId, clock.UtcNow);
+            shift.OpeningFloat, shift.PayIns, shift.PayOuts, methods, shift.CashVariance, shift.VarianceJournalId, clock.UtcNow, ForeignCash(computed.Receipts));
     }
+
+    /// <summary>Foreign cash kept in the drawer per currency: tendered on sales (change is given in the terminal currency).</summary>
+    private static IReadOnlyList<ForeignCashDto> ForeignCash(IReadOnlyList<PosReceipt> receipts) =>
+        receipts.Where(r => r.Kind == ReceiptKind.Sale).SelectMany(r => r.Payments).Where(p => p.ForeignCurrency is not null)
+            .GroupBy(p => p.ForeignCurrency!)
+            .Select(g => new ForeignCashDto(g.Key, g.Sum(p => p.ForeignAmount ?? 0), g.Sum(p => p.Amount)))
+            .OrderBy(f => f.Currency).ToList();
 }
 
 public sealed record ListShiftReceiptsQuery(Guid ShiftId) : IQuery<IReadOnlyList<ReceiptDto>>;

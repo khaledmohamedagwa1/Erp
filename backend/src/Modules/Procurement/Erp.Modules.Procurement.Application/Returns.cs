@@ -65,11 +65,6 @@ public sealed class CreatePurchaseReturnHandler(IProcurementDbContext db, ITenan
                 return Error.NotFound("procurement.line-not-found", "A referenced line was not found.");
             }
 
-            if (receiptLine.CounterRole == GoodsReceipt.GoodsInvoicedNotReceivedRole)
-            {
-                return ProcurementAppErrors.InvoiceBeforeReceiptReturn;
-            }
-
             if (input.Quantity > receiptLine.ReturnableQuantity)
             {
                 return ProcurementErrors.OverReturn;
@@ -179,12 +174,9 @@ public sealed class PostPurchaseReturnHandler(
         var stockLines = new List<InventoryPostingLine>();
         foreach (var line in purchaseReturn.Lines)
         {
+            // Goods received against an earlier invoice are fully invoiced: the whole return becomes a debit note at the invoiced terms
+            // (recorded on the receipt line when it was posted).
             var receiptLine = receipt.Line(line.GoodsReceiptLineId);
-            if (receiptLine.CounterRole == GoodsReceipt.GoodsInvoicedNotReceivedRole)
-            {
-                return ProcurementAppErrors.InvoiceBeforeReceiptReturn;
-            }
-
             var (uninvoiced, invoiced, relief) = receipt.ApplyReturn(receiptLine.LineId, line.Quantity);
             order.ApplyReceipt(receiptLine.PurchaseOrderLineId, -line.Quantity, 0);
             if (invoiced > 0)
@@ -228,8 +220,10 @@ public sealed class PostPurchaseReturnHandler(
             split[i] = line with { CostBase = cost };
             if (line.InvoicedQuantity > 0)
             {
-                var net = Money.Round(line.InvoicedQuantity * receiptLine.InvoicedUnitPrice, decimals);
-                var tax = await taxes.CalculateAsync(receiptLine.InvoiceTaxGroupId, net, currency, purchaseReturn.Date, cancellationToken);
+                var invoicedPrice = receiptLine.InvoicedUnitPrice > 0 ? receiptLine.InvoicedUnitPrice : receiptLine.UnitPrice;
+                var net = Money.Round(line.InvoicedQuantity * invoicedPrice, decimals);
+                var taxGroup = receiptLine.InvoiceTaxGroupId ?? order.Line(receiptLine.PurchaseOrderLineId).TaxGroupId;
+                var tax = await taxes.CalculateAsync(taxGroup, net, currency, purchaseReturn.Date, cancellationToken);
                 if (tax.IsFailure)
                 {
                     return tax.Error;

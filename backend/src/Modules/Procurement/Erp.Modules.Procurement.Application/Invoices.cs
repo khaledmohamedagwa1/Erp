@@ -18,7 +18,7 @@ namespace Erp.Modules.Procurement.Application;
 public sealed record InvoiceLineDto(Guid LineId, string Kind, Guid? GoodsReceiptId, Guid? GoodsReceiptLineId, Guid? PurchaseOrderId, Guid? PurchaseOrderLineId,
     Guid? ProductId, Guid? AccountId, string? Description, decimal Quantity, decimal UnitPrice, Guid? TaxGroupId, decimal NetAmount, decimal RecoverableTax,
     decimal NonRecoverableTax, decimal OrderUnitPrice, decimal PriceVariancePercent, bool QuantityException, bool PriceException, decimal BaseNet,
-    decimal GrniBase, decimal VarianceToInventory, decimal VarianceToPpv);
+    decimal GrniBase, decimal VarianceToInventory, decimal VarianceToPpv, decimal FxDifference = 0);
 
 public sealed record PurchaseInvoiceDto(Guid Id, Guid LegalEntityId, Guid SupplierId, string SupplierInvoiceNumber, string? Number, DateOnly InvoiceDate,
     DateOnly? PostingDate, string Currency, decimal ExchangeRate, string Status, string MatchStatus, decimal NetTotal, decimal TaxTotal, decimal GrandTotal,
@@ -28,7 +28,7 @@ internal static class InvoiceMapping
 {
     public static InvoiceLineDto ToDto(PurchaseInvoiceLine l) => new(l.LineId, l.Kind.ToString(), l.GoodsReceiptId, l.GoodsReceiptLineId, l.PurchaseOrderId,
         l.PurchaseOrderLineId, l.ProductId, l.AccountId, l.Description, l.Quantity, l.UnitPrice, l.TaxGroupId, l.NetAmount, l.RecoverableTax, l.NonRecoverableTax,
-        l.OrderUnitPrice, l.PriceVariancePercent, l.QuantityException, l.PriceException, l.BaseNet, l.GrniBase, l.VarianceToInventory, l.VarianceToPpv);
+        l.OrderUnitPrice, l.PriceVariancePercent, l.QuantityException, l.PriceException, l.BaseNet, l.GrniBase, l.VarianceToInventory, l.VarianceToPpv, l.FxDifference);
 
     public static PurchaseInvoiceDto ToDto(PurchaseInvoice i) => new(i.Id, i.LegalEntityId, i.SupplierId, i.SupplierInvoiceNumber, i.Number, i.InvoiceDate,
         i.PostingDate, i.Currency, i.ExchangeRate, i.Status.ToString(), i.MatchStatus.ToString(), i.NetTotal, i.TaxTotal, i.GrandTotal, i.BaseTotal, i.OpenAmount,
@@ -444,7 +444,16 @@ public sealed class PostPurchaseInvoiceHandler(
                     orders[order.Id] = order;
                     order.ApplyInvoice(receiptLine.PurchaseOrderLineId, line.Quantity);
 
-                    var variance = costBase - relief;
+                    // The receipt was valued at its own rate; the part of the difference caused by the rate moving between receipt and
+                    // invoice is realised FX, only the price difference (at the receipt rate) adjusts inventory / goes to PPV.
+                    var fx = 0m;
+                    if (receiptLine.CounterRole != GoodsReceipt.GoodsInvoicedNotReceivedRole && receipt.ExchangeRate > 0 && receipt.ExchangeRate != invoice.ExchangeRate)
+                    {
+                        var bucket = buckets.First(b => b.Line == i && b.TaxCodeId is null).Amount;
+                        fx = costBase - Money.Round(bucket * receipt.ExchangeRate);
+                    }
+
+                    var variance = costBase - fx - relief;
                     decimal toInventory = 0, toPpv = variance;
                     if (variance != 0 && receiptLine.MovementId is { } movementId)
                     {
@@ -461,14 +470,16 @@ public sealed class PostPurchaseInvoiceHandler(
                     journal.Add(PostingRoles.GoodsReceivedNotInvoiced, relief, ProcurementPostingContext.Product(product!), receipt.Number);
                     journal.Add(PostingRoles.Inventory, toInventory, ProcurementPostingContext.Stock(product!, receipt.WarehouseId), product!.Sku);
                     journal.Add(PostingRoles.PurchasePriceVariance, toPpv, ProcurementPostingContext.Product(product), product.Sku);
-                    posted = posted with { GrniBase = relief, VarianceToInventory = toInventory, VarianceToPpv = toPpv };
+                    journal.Add(fx > 0 ? PostingRoles.RealizedFxLoss : PostingRoles.RealizedFxGain, fx, null, $"FX receipt {receipt.Number} → invoice");
+                    posted = posted with { GrniBase = relief, VarianceToInventory = toInventory, VarianceToPpv = toPpv, FxDifference = fx };
                     break;
                 }
 
                 case InvoiceLineKind.Order:
                 {
                     var order = orders[line.PurchaseOrderId!.Value];
-                    order.ApplyInvoiceBeforeReceipt(line.PurchaseOrderLineId!.Value, line.Quantity, costBase);
+                    order.ApplyInvoiceBeforeReceipt(line.PurchaseOrderLineId!.Value, line.Quantity, costBase,
+                        line.Quantity == 0 ? 0 : Money.Cost(line.NetAmount / line.Quantity), invoice.ExchangeRate, line.TaxGroupId);
                     journal.Add(PostingRoles.GoodsInvoicedNotReceived, costBase, ProcurementPostingContext.Product(product!), order.Number);
                     break;
                 }

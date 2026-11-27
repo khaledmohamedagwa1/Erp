@@ -188,6 +188,7 @@ public static class PolicyValidation
     private static readonly string[] Backdating = ["WithinOpenPeriod", "NotAllowed"];
     private static readonly string[] IssueTimings = ["AtInvoice", "AtDelivery"];
     private static readonly string[] CreditActions = ["Warn", "RequireApproval", "Block"];
+    private static readonly string[] ReceiptRates = ["ReceiptDate", "OrderRate"];
 
     public static Result Validate(object policy)
     {
@@ -209,6 +210,7 @@ public static class PolicyValidation
                 Check(errors, "creditLimitAction", CreditActions.Contains(p.CreditLimitAction), CreditActions);
                 break;
             case ProcurementPolicy p:
+                Check(errors, "receiptValuationRate", ReceiptRates.Contains(p.ReceiptValuationRate), ReceiptRates);
                 if (p.PriceTolerancePercent is < 0 or > 100)
                 {
                     errors["priceTolerancePercent"] = ["Must be between 0 and 100."];

@@ -1,4 +1,5 @@
 using Erp.Application;
+using Erp.Application.Abstractions;
 using Erp.Application.Messaging;
 using Erp.Infrastructure;
 using Erp.Modules.Pos.Application;
@@ -30,6 +31,12 @@ public sealed record SubmitReceiptBody(
     IReadOnlyList<PosPaymentInput> Payments);
 
 public sealed record RefundBody(Guid ClientReceiptId, IReadOnlyList<RefundLineInput> Lines, IReadOnlyList<PosPaymentInput>? Payments, Guid? TerminalId);
+
+public sealed record OfflineRangeBody(int Size);
+
+public sealed record OfflineSyncBody(IReadOnlyList<OfflineReceiptInput> Receipts);
+
+public sealed record OfflineSyncResultDto(int Accepted, int Replayed, int Rejected, IReadOnlyList<OfflineReceiptResultDto> Results);
 
 public sealed class PosModule : IErpModule
 {
@@ -160,6 +167,40 @@ public sealed class PosModule : IErpModule
                 (await d.Send(new RefundReceiptCommand(id, b.ClientReceiptId, b.Lines ?? [], b.Payments, b.TerminalId, deviceKey), ct))
                 .ToHttpResult(r => r.Replayed ? Results.Ok(r) : Results.Created($"/api/v1/pos/receipts/{r.Id}", r)))
             .RequirePermission(PosPermissions.Refund).RequireIdempotency();
+
+        // ---- Offline mode ----
+        g.MapPost("/terminals/{id:guid}/offline-range", async (Guid id, OfflineRangeBody b, [FromHeader(Name = PosDevice.HeaderName)] string? deviceKey, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new AllocateOfflineRangeCommand(id, b.Size, deviceKey), ct)).ToHttpResult())
+            .RequirePermission(PosPermissions.Sell).RequireIdempotency();
+
+        // Each receipt is posted in its own transaction (idempotent per client receipt id), so one rejected receipt never blocks the others.
+        g.MapPost("/terminals/{id:guid}/offline-sync", async (Guid id, OfflineSyncBody b, [FromHeader(Name = PosDevice.HeaderName)] string? deviceKey, IDispatcher d,
+                IEnumerable<IChangeTrackerReset> resets, CancellationToken ct) =>
+            {
+                var results = new List<OfflineReceiptResultDto>();
+                foreach (var receipt in (b.Receipts ?? []).OrderBy(r => r.CreatedAtUtc))
+                {
+                    var result = await d.Send(new SubmitOfflineReceiptCommand(id, receipt, deviceKey), ct);
+                    foreach (var reset in resets)
+                    {
+                        reset.ClearTrackedChanges(); // a rolled-back receipt must not leak into the next one
+                    }
+
+                    if (result.IsFailure && result.Error.Code is "pos.terminal-not-found" or "pos.device-key-invalid")
+                    {
+                        return result.Error.ToProblem();
+                    }
+
+                    results.Add(result.IsSuccess
+                        ? result.Value
+                        : new OfflineReceiptResultDto(receipt.ClientReceiptId, receipt.OfflineNumber, "Rejected", null,
+                            [new OfflineConflictDto(result.Error.Code, result.Error.Message)]));
+                }
+
+                return Results.Ok(new OfflineSyncResultDto(results.Count(r => r.Status == "Accepted"), results.Count(r => r.Status == "Replayed"),
+                    results.Count(r => r.Status == "Rejected"), results));
+            })
+            .RequirePermission(PosPermissions.Sell);
     }
 
     private static IResult WithETag<T>(HttpContext http, string version, T body)

@@ -40,7 +40,16 @@ public sealed class StockDocumentLine
 
     public decimal LostBaseQuantity { get; set; }
 
+    /// <summary>Cost carried into the destination so far; the receipt that empties the line takes the exact remainder (no residue).</summary>
+    public decimal ReceivedTotalCost { get; set; }
+
     public List<string> ReceivedSerials { get; set; } = [];
+
+    /// <summary>Optional bin: put-away bin on inbound lines, pick bin on outbound lines (bin-managed warehouses only).</summary>
+    public Guid? BinId { get; set; }
+
+    /// <summary>Transfers: put-away bin at the destination.</summary>
+    public Guid? ToBinId { get; set; }
 
     internal static List<StockDocumentLine> Validate(IEnumerable<StockDocumentLine> lines, bool signed)
     {
@@ -294,6 +303,7 @@ public enum TransferStatus
 /// <summary>
 /// Stock transfer via the legal entity's transit warehouse: Draft → Approved → (issue) InTransit → (receive)
 /// PartiallyReceived / Completed. Closing with a discrepancy writes the remainder off as an in-transit loss. Cost is carried.
+/// A <see cref="Direct"/> transfer moves the stock from source to destination in one posting (no transit): Approved → Completed.
 /// </summary>
 [Audited]
 public sealed class StockTransfer : AggregateRoot, ICompanyScoped
@@ -302,7 +312,7 @@ public sealed class StockTransfer : AggregateRoot, ICompanyScoped
     {
     }
 
-    public StockTransfer(Guid companyId, Guid legalEntityId, Guid fromWarehouseId, Guid toWarehouseId, Guid transitWarehouseId, string number, DateOnly date, string? notes, IEnumerable<StockDocumentLine> lines)
+    public StockTransfer(Guid companyId, Guid legalEntityId, Guid fromWarehouseId, Guid toWarehouseId, Guid transitWarehouseId, string number, DateOnly date, string? notes, IEnumerable<StockDocumentLine> lines, bool direct = false)
         : base(SequentialGuid.New())
     {
         if (fromWarehouseId == toWarehouseId)
@@ -315,6 +325,7 @@ public sealed class StockTransfer : AggregateRoot, ICompanyScoped
         FromWarehouseId = fromWarehouseId;
         ToWarehouseId = toWarehouseId;
         TransitWarehouseId = transitWarehouseId;
+        Direct = direct;
         Number = number;
         Date = date;
         Notes = notes is { Length: > 500 } ? notes[..500] : notes;
@@ -331,6 +342,8 @@ public sealed class StockTransfer : AggregateRoot, ICompanyScoped
     public Guid ToWarehouseId { get; private set; }
 
     public Guid TransitWarehouseId { get; private set; }
+
+    public bool Direct { get; private set; }
 
     public string Number { get; private set; } = string.Empty;
 
@@ -370,10 +383,49 @@ public sealed class StockTransfer : AggregateRoot, ICompanyScoped
         Status = TransferStatus.InTransit;
     }
 
+    /// <summary>Direct transfer: issued and received in one posting.</summary>
+    public void MarkMovedDirectly(IReadOnlyDictionary<Guid, (decimal BaseQuantity, decimal UnitCost, decimal TotalCost)> moved)
+    {
+        Require(TransferStatus.Approved);
+        if (!Direct)
+        {
+            throw new DomainException(InventoryErrors.InvalidTransition);
+        }
+
+        foreach (var line in Lines)
+        {
+            var m = moved[line.LineId];
+            line.PostedBaseQuantity = m.BaseQuantity;
+            line.PostedUnitCost = m.UnitCost;
+            line.PostedTotalCost = m.TotalCost;
+            line.ReceivedBaseQuantity = m.BaseQuantity;
+            line.ReceivedTotalCost = m.TotalCost;
+            line.ReceivedSerials = line.Serials.ToList();
+        }
+
+        ReceiptCount = 1;
+        Status = TransferStatus.Completed;
+    }
+
+    /// <summary>
+    /// Cost to carry for <paramref name="baseQuantity"/> of the line: the exact remainder when it empties the line; partial receipts carry
+    /// whole cents, so the receipt journals (posted in minor units) add up to exactly what the issue journal put in transit.
+    /// </summary>
+    public decimal CarriedCost(StockDocumentLine line, decimal baseQuantity)
+    {
+        var posted = line.PostedTotalCost ?? 0;
+        if (baseQuantity >= OpenBaseQuantity(line))
+        {
+            return posted - line.ReceivedTotalCost - InventoryRounding.Money((line.PostedUnitCost ?? 0) * line.LostBaseQuantity);
+        }
+
+        return Math.Round((line.PostedUnitCost ?? 0) * baseQuantity, 2, MidpointRounding.AwayFromZero);
+    }
+
     public decimal OpenBaseQuantity(StockDocumentLine line) => (line.PostedBaseQuantity ?? 0) - line.ReceivedBaseQuantity - line.LostBaseQuantity;
 
     /// <summary>Validates a receipt and returns the receipt number (1-based).</summary>
-    public int RecordReceipt(IReadOnlyDictionary<Guid, (decimal BaseQuantity, IReadOnlyList<string> Serials)> received)
+    public int RecordReceipt(IReadOnlyDictionary<Guid, (decimal BaseQuantity, IReadOnlyList<string> Serials)> received, IReadOnlyDictionary<Guid, decimal>? carriedCosts = null)
     {
         if (Status is not (TransferStatus.InTransit or TransferStatus.PartiallyReceived))
         {
@@ -390,6 +442,7 @@ public sealed class StockTransfer : AggregateRoot, ICompanyScoped
             }
 
             line.ReceivedBaseQuantity += r.BaseQuantity;
+            line.ReceivedTotalCost += carriedCosts?.GetValueOrDefault(lineId) ?? InventoryRounding.Money((line.PostedUnitCost ?? 0) * r.BaseQuantity);
             line.ReceivedSerials.AddRange(r.Serials);
         }
 
@@ -453,6 +506,9 @@ public sealed class StockCountLine
 
     public string? BatchNumber { get; set; }
 
+    /// <summary>Serial-tracked products are counted per serial: one line per serial, quantity 0 or 1.</summary>
+    public string? Serial { get; set; }
+
     public Guid BaseUomId { get; set; }
 
     public decimal SnapshotQuantity { get; set; }
@@ -467,7 +523,7 @@ public sealed class StockCountLine
 /// <summary>
 /// Stock count in snapshot mode (OQ-INV-6): Open → snapshot (Counting) → counts → variance → approval → posting, which
 /// generates and posts a stock adjustment. Movements keep flowing during the count. Quantities are in base units.
-/// Lines left uncounted are ignored. Serial-tracked products are counted through adjustments, not counts.
+/// Lines left uncounted are ignored. Serial-tracked products are counted by serial (<see cref="EnterSerialCount"/>).
 /// </summary>
 [Audited]
 public sealed class StockCount : AggregateRoot, IWarehouseScoped
@@ -529,7 +585,7 @@ public sealed class StockCount : AggregateRoot, IWarehouseScoped
             throw new DomainException(Error.Validation("inventory.quantity-invalid", "Counted quantity cannot be negative."));
         }
 
-        var line = Lines.FirstOrDefault(l => l.ProductId == productId && l.VariantId == variantId && l.BatchId == batchId);
+        var line = Lines.FirstOrDefault(l => l.ProductId == productId && l.VariantId == variantId && l.BatchId == batchId && l.Serial == null);
         if (line is null)
         {
             // Found stock that the snapshot did not know about.
@@ -538,6 +594,25 @@ public sealed class StockCount : AggregateRoot, IWarehouseScoped
         }
 
         line.CountedQuantity = counted;
+    }
+
+    /// <summary>
+    /// Serial count of a product: every snapshot serial of the product is counted 1 when found, 0 when missing; serials found that the
+    /// snapshot did not list are added (found stock).
+    /// </summary>
+    public void EnterSerialCount(Guid productId, Guid? variantId, Guid baseUomId, IReadOnlyCollection<string> found)
+    {
+        Require(CountStatus.Counting);
+        var set = found.Select(s => s.Trim()).Where(s => s.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in Lines.Where(l => l.ProductId == productId && l.VariantId == variantId && l.Serial is not null))
+        {
+            line.CountedQuantity = set.Remove(line.Serial!) ? 1 : 0;
+        }
+
+        foreach (var serial in set.Order(StringComparer.OrdinalIgnoreCase))
+        {
+            Lines.Add(new StockCountLine { LineId = SequentialGuid.New(), ProductId = productId, VariantId = variantId, Serial = serial, BaseUomId = baseUomId, CountedQuantity = 1 });
+        }
     }
 
     public void ReopenCounting()

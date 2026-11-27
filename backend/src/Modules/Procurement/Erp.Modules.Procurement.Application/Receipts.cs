@@ -48,7 +48,8 @@ public sealed class CreateGoodsReceiptValidator : AbstractValidator<CreateGoodsR
     }
 }
 
-public sealed class CreateGoodsReceiptHandler(IProcurementDbContext db, ProductLookup products, IDocumentNumberGenerator numbers, ITenantContext tenant)
+public sealed class CreateGoodsReceiptHandler(IProcurementDbContext db, ProductLookup products, IDocumentNumberGenerator numbers, ITenantContext tenant,
+    ProcurementScope scope, ProcurementPolicy policy)
     : ICommandHandler<CreateGoodsReceiptCommand, GoodsReceiptDto>
 {
     public async Task<Result<GoodsReceiptDto>> Handle(CreateGoodsReceiptCommand command, CancellationToken cancellationToken)
@@ -81,10 +82,16 @@ public sealed class CreateGoodsReceiptHandler(IProcurementDbContext db, ProductL
             return ProcurementAppErrors.NotStockable;
         }
 
+        var rate = await ReceiptRateAsync(order, command.Date, cancellationToken);
+        if (rate.IsFailure)
+        {
+            return rate.Error;
+        }
+
         var number = await numbers.NextAsync(new NumberScope(tenant.CompanyId!.Value, "GoodsReceipt", "GRN", order.LegalEntityId, order.BranchId,
             FiscalYear: command.Date.Year), cancellationToken);
         var receipt = new GoodsReceipt(tenant.CompanyId.Value, order.LegalEntityId, order.Id, order.SupplierId, order.WarehouseId, number, command.Date,
-            order.Currency, order.ExchangeRate, command.Notes,
+            order.Currency, rate.Value, command.Notes,
             command.Lines.Select(l =>
             {
                 var orderLine = orderLines[l.PurchaseOrderLineId];
@@ -94,6 +101,28 @@ public sealed class CreateGoodsReceiptHandler(IProcurementDbContext db, ProductL
         db.Receipts.Add(receipt);
         await db.SaveChangesAsync(cancellationToken);
         return ReceiptMapping.ToDto(receipt);
+    }
+
+    /// <summary>
+    /// Goods are valued at the spot rate of the receipt date (IAS 21: the transaction date), unless the procurement policy keeps the
+    /// order rate. Without a rate for that date the order's rate is used.
+    /// </summary>
+    private async Task<Result<decimal>> ReceiptRateAsync(PurchaseOrder order, DateOnly date, CancellationToken ct)
+    {
+        var settings = await policy.GetAsync(order.CompanyId, ct);
+        if (string.Equals(settings.ReceiptValuationRate, "OrderRate", StringComparison.OrdinalIgnoreCase))
+        {
+            return order.ExchangeRate;
+        }
+
+        var le = await scope.LegalEntityAsync(order.LegalEntityId, ct);
+        if (le.IsFailure)
+        {
+            return le.Error;
+        }
+
+        var rate = await scope.RateAsync(order.Currency, le.Value.FunctionalCurrency, date, null, ct);
+        return rate.IsSuccess ? rate.Value : order.ExchangeRate;
     }
 }
 
@@ -185,6 +214,7 @@ public sealed class PostGoodsReceiptHandler(IProcurementDbContext db, ProductLoo
 
         var postingLines = new List<InventoryPostingLine>();
         var counterRoles = new Dictionary<Guid, string>();
+        var invoicedTerms = new Dictionary<Guid, (decimal UnitPrice, decimal Rate, Guid? TaxGroupId)>();
         foreach (var line in receipt.Lines.Where(l => l.AcceptedQuantity > 0))
         {
             var product = catalog.Value[line.ProductId];
@@ -202,10 +232,14 @@ public sealed class PostGoodsReceiptHandler(IProcurementDbContext db, ProductLoo
                 var value = order.ConsumeInvoicedNotReceived(orderLine.LineId, line.AcceptedQuantity);
                 unitCost = Money.Cost(value / (line.AcceptedQuantity * factor));
                 counterRole = PostingRoles.GoodsInvoicedNotReceived;
+                invoicedTerms[line.LineId] = (orderLine.InvoicedNotReceivedUnitPrice > 0 ? orderLine.InvoicedNotReceivedUnitPrice : orderLine.NetUnitPrice,
+                    orderLine.InvoicedNotReceivedRate > 0 ? orderLine.InvoicedNotReceivedRate : order.ExchangeRate,
+                    orderLine.InvoicedNotReceivedTaxGroupId ?? orderLine.TaxGroupId);
             }
             else
             {
-                unitCost = Money.Cost(orderLine.NetUnitPrice * order.ExchangeRate / factor);
+                // Valued at the receipt's rate (receipt-date spot rate by default); the difference to the invoice rate is realised FX.
+                unitCost = Money.Cost(orderLine.NetUnitPrice * receipt.ExchangeRate / factor);
                 counterRole = PostingRoles.GoodsReceivedNotInvoiced;
             }
 
@@ -226,15 +260,26 @@ public sealed class PostGoodsReceiptHandler(IProcurementDbContext db, ProductLoo
         }
 
         var results = posted.Value.Lines.ToDictionary(l => l.LineId);
-        var postedLines = receipt.Lines.Select(l => results.TryGetValue(l.LineId, out var r)
-            ? l with
+        var postedLines = receipt.Lines.Select(l =>
+        {
+            if (!results.TryGetValue(l.LineId, out var r))
+            {
+                return l;
+            }
+
+            var posted = l with
             {
                 MovementId = r.Movements.FirstOrDefault()?.MovementId,
                 BaseQuantity = r.BaseQuantity,
                 BaseValue = r.TotalCost,
                 CounterRole = counterRoles[l.LineId],
-            }
-            : l).ToList();
+            };
+
+            // Received against an earlier invoice: remember the invoiced terms so a later return becomes a debit note at those terms.
+            return invoicedTerms.TryGetValue(l.LineId, out var terms)
+                ? posted with { InvoicedUnitPrice = terms.UnitPrice, InvoiceRate = terms.Rate, InvoiceTaxGroupId = terms.TaxGroupId }
+                : posted;
+        }).ToList();
         receipt.MarkPosted(postedLines, posted.Value.JournalId);
         await db.SaveChangesAsync(cancellationToken);
         return ReceiptMapping.ToDto(receipt);

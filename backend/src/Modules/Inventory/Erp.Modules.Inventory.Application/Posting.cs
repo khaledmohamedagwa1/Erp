@@ -36,6 +36,16 @@ public interface IInventoryDbContext
 
     DbSet<StockCount> Counts { get; }
 
+    DbSet<CostLayerAdjustment> CostLayerAdjustments { get; }
+
+    DbSet<StorageBin> Bins { get; }
+
+    DbSet<BinBalance> BinBalances { get; }
+
+    DbSet<BinMovement> BinMovements { get; }
+
+    DbSet<RecostRun> RecostRuns { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
 
@@ -63,6 +73,9 @@ public interface IInventoryStore
     Task<StockApplyStatus> ReserveAsync(Guid companyId, Guid productId, Guid variantKey, Guid warehouseId, decimal baseQuantity, CancellationToken cancellationToken);
 
     Task ReleaseAsync(Guid companyId, Guid productId, Guid variantKey, Guid warehouseId, decimal baseQuantity, CancellationToken cancellationToken);
+
+    /// <summary>Creates the item's aggregate balance row if missing and update-locks it (serialises bin changes of the item/warehouse).</summary>
+    Task LockItemAsync(Guid companyId, Guid productId, Guid variantKey, Guid warehouseId, CancellationToken cancellationToken);
 
     /// <summary>Creates the valuation row if missing and holds an update lock on it until the transaction ends.</summary>
     Task LockValuationAsync(Guid companyId, Guid valuationAreaId, Guid productId, Guid variantKey, string costingMethod, CancellationToken cancellationToken);
@@ -165,10 +178,12 @@ public sealed class InventoryPostingService(
     IJournalPostingService journals,
     ICurrentUser currentUser,
     ITenantContext tenant,
-    IClock clock) : IInventoryPostingService
+    IClock clock,
+    BinStock bins) : IInventoryPostingService
 {
     public const string JournalPurpose = "inventory";
     public const string TrueUpPurpose = "inventory-true-up";
+    public const string AdjustmentReversalPurpose = "inventory-adjustment-reversal";
 
     private sealed record WorkItem(
         InventoryPostingLine Line,
@@ -180,7 +195,9 @@ public sealed class InventoryPostingService(
         Batch? Batch,
         string? Serial,
         Guid AreaId,
-        bool SkipValuation);
+        bool SkipValuation,
+        Guid? CostSourceId = null,
+        decimal? FixedTotal = null);
 
     private sealed record Posted(WorkItem Work, InventoryMovement Movement);
 
@@ -252,9 +269,19 @@ public sealed class InventoryPostingService(
             }
 
             posted.Add(new Posted(item, result.Value));
+            var binned = await bins.ApplyAsync(ctx.CompanyId, item.Key, item.BaseQuantity, item.Line.BinId, result.Value.Id,
+                request.SourceDocType, request.SourceDocId, cancellationToken);
+            if (binned.IsFailure)
+            {
+                return binned.Error;
+            }
         }
 
         ApplySerialMoves(posted);
+        if (ctx.Policy.AutoRecostBackdatedPostings)
+        {
+            await QueueRecostForBackdatingAsync(ctx, request, posted, cancellationToken);
+        }
 
         // One true-up per line (serial lines are expanded into several items).
         trueUps = trueUps.GroupBy(t => t.Work.Line.LineId)
@@ -371,6 +398,17 @@ public sealed class InventoryPostingService(
         var variantKey = Keys.Of(line.VariantId);
         var items = new List<WorkItem>();
 
+        if (inbound && line.CostSourceMovementId is { } returnSourceId)
+        {
+            var plan = await PlanReturnAsync(ctx, line, index, product, returnSourceId, baseQuantity, area, skipValuation, ct);
+            if (plan is not null)
+            {
+                return Result.Success<IReadOnlyList<WorkItem>>(plan);
+            }
+        }
+
+        var fixedTotal = inbound ? line.TotalCost : null;
+
         if (product.Tracking == "Serial" && ctx.Policy.EnableSerialTracking)
         {
             var serials = line.Serials ?? [];
@@ -405,7 +443,7 @@ public sealed class InventoryPostingService(
                 }
 
                 var batch = await FindOrCreateBatchAsync(ctx.CompanyId, product.Id, line.Batch, ct);
-                items.Add(new WorkItem(line, index, product, new StockKey(product.Id, variantKey, line.WarehouseId, batch.Id), baseQuantity, line.Quantity, batch, null, area, skipValuation));
+                items.Add(new WorkItem(line, index, product, new StockKey(product.Id, variantKey, line.WarehouseId, batch.Id), baseQuantity, line.Quantity, batch, null, area, skipValuation, FixedTotal: fixedTotal));
                 return items;
             }
 
@@ -460,8 +498,147 @@ public sealed class InventoryPostingService(
             return items;
         }
 
-        items.Add(new WorkItem(line, index, product, new StockKey(product.Id, variantKey, line.WarehouseId, Guid.Empty), baseQuantity, line.Quantity, null, null, area, skipValuation));
+        items.Add(new WorkItem(line, index, product, new StockKey(product.Id, variantKey, line.WarehouseId, Guid.Empty), baseQuantity, line.Quantity, null, null, area, skipValuation, FixedTotal: fixedTotal));
         return items;
+    }
+
+    /// <summary>
+    /// A return of an issue line restocks what actually left: the issue line's outbound movements (one per batch or serial) are found
+    /// from the cost-source movement, and the return is split across them in proportion to what each can still take back. Each part
+    /// comes back into its own batch at its own cost. Returns null when the source is not an outbound movement (normal handling).
+    /// </summary>
+    private async Task<IReadOnlyList<WorkItem>?> PlanReturnAsync(
+        PostingContextResolver.Resolved ctx, InventoryPostingLine line, int index, ProductInfo product, Guid sourceId, decimal baseQuantity,
+        Guid area, bool skipValuation, CancellationToken ct)
+    {
+        var source = await db.Movements.AsNoTracking().FirstOrDefaultAsync(m => m.Id == sourceId, ct);
+        if (source is null || source.BaseQuantity >= 0 || source.ProductId != product.Id)
+        {
+            return null;
+        }
+
+        var serialTracked = product.Tracking == "Serial" && ctx.Policy.EnableSerialTracking;
+        var issues = await ReturnableIssuesAsync(source.SourceDocType, source.SourceDocId, source.SourceLineId, source.MovementType, ct);
+        if (issues.Count <= 1 && !serialTracked)
+        {
+            return null;
+        }
+
+        var variantKey = Keys.Of(line.VariantId);
+        var items = new List<WorkItem>();
+        if (serialTracked)
+        {
+            var serials = line.Serials ?? [];
+            if (Math.Abs(baseQuantity) != serials.Count || serials.Distinct(StringComparer.OrdinalIgnoreCase).Count() != serials.Count)
+            {
+                return null; // the regular serial path reports the mismatch
+            }
+
+            var perUnit = line.Quantity / baseQuantity;
+            foreach (var serial in serials)
+            {
+                var issued = issues.FirstOrDefault(i => string.Equals(i.Serial, serial.Trim(), StringComparison.OrdinalIgnoreCase));
+                items.Add(new WorkItem(line, index, product, new StockKey(product.Id, variantKey, line.WarehouseId, Guid.Empty), 1, perUnit, null, serial.Trim(),
+                    area, skipValuation, CostSourceId: issued?.Movement.Id ?? source.Id));
+            }
+
+            return items;
+        }
+
+        var allocation = ReturnAllocation.Allocate(baseQuantity, issues.Select(i => new ReturnAllocation.Source(i.Movement.Id, i.Returnable)).ToList())
+                         ?? ReturnAllocation.Allocate(baseQuantity, issues.Select(i => new ReturnAllocation.Source(i.Movement.Id, -i.Movement.BaseQuantity)).ToList());
+        if (allocation is null)
+        {
+            return null;
+        }
+
+        var batchIds = issues.Where(i => i.Movement.BatchId is not null).Select(i => i.Movement.BatchId!.Value).Distinct().ToList();
+        var batches = await db.Batches.Where(b => batchIds.Contains(b.Id)).ToDictionaryAsync(b => b.Id, ct);
+        var allocated = 0m;
+        for (var i = 0; i < allocation.Count; i++)
+        {
+            var (movementId, quantity) = allocation[i];
+            var issue = issues.First(x => x.Movement.Id == movementId);
+            var batch = issue.Movement.BatchId is { } batchId ? batches.GetValueOrDefault(batchId) : null;
+            var share = i == allocation.Count - 1 ? line.Quantity - allocated : InventoryRounding.Quantity(line.Quantity * (quantity / baseQuantity));
+            allocated += share;
+            items.Add(new WorkItem(line, index, product, new StockKey(product.Id, variantKey, line.WarehouseId, batch?.Id ?? Guid.Empty), quantity, share, batch, null,
+                area, skipValuation, CostSourceId: movementId));
+        }
+
+        return items;
+    }
+
+    private sealed record IssueState(InventoryMovement Movement, string? Serial, decimal Returned)
+    {
+        public decimal Returnable => Math.Max(0, -Movement.BaseQuantity - Returned);
+    }
+
+    private async Task<IReadOnlyList<IssueState>> ReturnableIssuesAsync(string docType, Guid docId, Guid? lineId, string? movementType, CancellationToken ct)
+    {
+        var all = await db.Movements.AsNoTracking()
+            .Where(m => m.SourceDocType == docType && m.SourceDocId == docId && m.SourceLineId == lineId)
+            .ToListAsync(ct);
+        var reversed = all.Where(m => m.ReversalOfId != null).Select(m => m.ReversalOfId!.Value).ToHashSet();
+        var issues = all.Where(m => m.ReversalOfId == null && m.BaseQuantity < 0 && !reversed.Contains(m.Id) &&
+                                    (movementType is null ? InventoryMovementTypes.Outbound.Contains(m.MovementType) : m.MovementType == movementType))
+            .OrderBy(m => m.PostingSequence).ThenBy(m => m.Id).ToList();
+        if (issues.Count == 0)
+        {
+            return [];
+        }
+
+        var ids = issues.Select(m => m.Id).ToList();
+        var returned = await db.Movements.AsNoTracking()
+            .Where(m => m.RelatedMovementId != null && ids.Contains(m.RelatedMovementId!.Value) && m.MovementType != InventoryMovementTypes.CostAdjustment)
+            .GroupBy(m => m.RelatedMovementId!.Value)
+            .Select(g => new { Id = g.Key, Quantity = g.Sum(m => m.BaseQuantity) })
+            .ToDictionaryAsync(x => x.Id, x => x.Quantity, ct);
+        var serialIds = issues.Where(m => m.SerialId is not null).Select(m => m.SerialId!.Value).ToList();
+        var serials = serialIds.Count == 0
+            ? new Dictionary<Guid, string>()
+            : await db.Serials.AsNoTracking().Where(x => serialIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Serial, ct);
+        return issues.Select(m => new IssueState(m, m.SerialId is { } sid ? serials.GetValueOrDefault(sid) : null, Math.Max(0, returned.GetValueOrDefault(m.Id)))).ToList();
+    }
+
+    internal async Task<IReadOnlyList<ReturnableIssue>> GetReturnableIssuesAsync(string docType, Guid docId, Guid lineId, CancellationToken ct)
+    {
+        var issues = await ReturnableIssuesAsync(docType, docId, lineId, null, ct);
+        var batchIds = issues.Where(i => i.Movement.BatchId is not null).Select(i => i.Movement.BatchId!.Value).Distinct().ToList();
+        var batches = await db.Batches.AsNoTracking().Where(b => batchIds.Contains(b.Id)).ToDictionaryAsync(b => b.Id, b => b.Number, ct);
+        return issues.Select(i => new ReturnableIssue(i.Movement.Id, i.Movement.WarehouseId, i.Movement.BatchId is { } b ? batches.GetValueOrDefault(b) : null, i.Serial,
+            -i.Movement.BaseQuantity, i.Returned, i.Returnable, i.Movement.UnitCost)).ToList();
+    }
+
+    /// <summary>
+    /// A posting dated before the item's latest movement in its valuation area changes the replayed order of costs: queue a recost run
+    /// (handled after commit through the outbox) for each weighted-average item concerned.
+    /// </summary>
+    private async Task QueueRecostForBackdatingAsync(PostingContextResolver.Resolved ctx, InventoryPostingRequest request, IReadOnlyList<Posted> posted, CancellationToken ct)
+    {
+        var keys = posted
+            .Where(p => !p.Work.SkipValuation && p.Movement.PostingSequence > 0 && CostingMethods.Normalize(p.Work.Product.CostingMethod) == CostingMethods.WeightedAverage)
+            .Select(p => (p.Work.AreaId, ProductId: p.Work.Product.Id, p.Work.Line.VariantId, p.Work.Line.WarehouseId))
+            .DistinctBy(k => (k.AreaId, k.ProductId, k.VariantId))
+            .ToList();
+        foreach (var (areaId, productId, variantId, warehouseId) in keys)
+        {
+            var later = await db.Movements.AsNoTracking().AnyAsync(m =>
+                m.ValuationAreaId == areaId && m.ProductId == productId && m.VariantId == variantId && m.TransactionDate > request.TransactionDate &&
+                !(m.SourceDocType == request.SourceDocType && m.SourceDocId == request.SourceDocId), ct);
+            if (!later)
+            {
+                continue;
+            }
+
+            var pending = await db.RecostRuns.AnyAsync(r => r.ValuationAreaId == areaId && r.ProductId == productId && r.VariantId == variantId &&
+                                                          r.Status == RecostStatus.Pending && r.FromDate <= request.TransactionDate, ct);
+            if (!pending)
+            {
+                db.RecostRuns.Add(new RecostRun(ctx.CompanyId, ctx.LegalEntity.Id, areaId, warehouseId, productId, variantId, request.TransactionDate,
+                    RecostTrigger.BackdatedPosting, $"{request.SourceDocType} {request.ReferenceNo}".Trim()));
+            }
+        }
     }
 
     private static bool IsIssueBlockedByExpiry(InventoryPostingLine line, Batch batch, DateOnly date, InventoryPolicySettings policy) =>
@@ -554,7 +731,7 @@ public sealed class InventoryPostingService(
         var quantity = Math.Abs(item.BaseQuantity);
 
         InventoryMovement? costSource = null;
-        if (line.CostSourceMovementId is { } sourceId)
+        if ((item.CostSourceId ?? line.CostSourceMovementId) is { } sourceId)
         {
             costSource = await db.Movements.AsNoTracking().FirstOrDefaultAsync(m => m.Id == sourceId, ct);
             if (costSource is null || costSource.ProductId != item.Product.Id)
@@ -593,8 +770,10 @@ public sealed class InventoryPostingService(
         {
             var current = await db.Valuations.AsNoTracking()
                 .FirstOrDefaultAsync(v => v.ValuationAreaId == item.AreaId && v.ProductId == item.Product.Id && v.VariantKey == item.Key.VariantKey, ct);
-            unitCost = inbound && line.UnitCost is { } given ? given : current is { Quantity: > 0 } ? InventoryRounding.Cost(current.Value / current.Quantity) : current?.LastCost ?? 0;
-            totalCost = InventoryRounding.Money(item.BaseQuantity * unitCost);
+            unitCost = inbound && item.FixedTotal is { } fixedTotal && quantity > 0 ? InventoryRounding.Cost(fixedTotal / quantity)
+                : inbound && (line.UnitCost ?? costSource?.UnitCost) is { } given ? given
+                : current is { Quantity: > 0 } ? InventoryRounding.Cost(current.Value / current.Quantity) : current?.LastCost ?? 0;
+            totalCost = inbound && item.FixedTotal is { } exact ? exact : InventoryRounding.Money(item.BaseQuantity * unitCost);
             var movement = NewMovement(ctx, request, item, line.MovementType, item.Quantity, item.BaseQuantity, unitCost, totalCost, 0, journalPurpose, item.Batch?.Id, null);
             db.Movements.Add(movement);
             return movement;
@@ -608,7 +787,7 @@ public sealed class InventoryPostingService(
 
         if (inbound)
         {
-            var cost = line.UnitCost ?? costSource?.UnitCost;
+            var cost = item.FixedTotal is { } fixedReceipt ? InventoryRounding.Cost(fixedReceipt / quantity) : line.UnitCost ?? costSource?.UnitCost;
             if (cost is null && line.MovementType == InventoryMovementTypes.AdjustmentGain)
             {
                 cost = state.Quantity > 0 ? InventoryRounding.Cost(state.Value / state.Quantity) : state.LastCost > 0 ? state.LastCost : null;
@@ -632,6 +811,15 @@ public sealed class InventoryPostingService(
             else
             {
                 outcome = WeightedAverage.Receive(state, quantity, cost.Value);
+            }
+
+            if (item.FixedTotal is { } exactTotal && exactTotal != outcome.TotalCost)
+            {
+                // Carried cost: receive exactly the given value (the unit cost is only its rounded quotient).
+                var delta = exactTotal - outcome.TotalCost;
+                var adjusted = outcome.State with { Value = outcome.State.Value + delta };
+                adjusted = adjusted with { AverageCost = adjusted.Quantity > 0 ? InventoryRounding.Cost(adjusted.Value / adjusted.Quantity) : adjusted.AverageCost };
+                outcome = outcome with { State = adjusted, TotalCost = exactTotal };
             }
 
             sequence = valuation.NextSequence();
@@ -847,6 +1035,7 @@ public sealed class InventoryPostingService(
         }
 
         var created = new List<InventoryMovement>();
+        var consumedAdjustments = new List<(InventoryMovement Original, decimal Consumed)>();
         var ordered = originals.OrderBy(m => new StockKey(m.ProductId, Keys.Of(m.VariantId), m.WarehouseId, Keys.Of(m.BatchId))).ToList();
         foreach (var original in ordered)
         {
@@ -865,6 +1054,7 @@ public sealed class InventoryPostingService(
             }
 
             long sequence = 0;
+            var valueRemoved = original.TotalCost;
             if (original.PostingSequence > 0 || original.MovementType == InventoryMovementTypes.CostAdjustment)
             {
                 var valuation = await LockedValuationAsync(ctx.CompanyId, original.ValuationAreaId, original.ProductId, key.VariantKey, cancellationToken);
@@ -872,6 +1062,12 @@ public sealed class InventoryPostingService(
                 if (reversed.IsFailure)
                 {
                     return reversed.Error;
+                }
+
+                valueRemoved = reversed.Value;
+                if (valueRemoved != original.TotalCost)
+                {
+                    consumedAdjustments.Add((original, original.TotalCost - valueRemoved));
                 }
 
                 sequence = valuation.NextSequence();
@@ -886,13 +1082,23 @@ public sealed class InventoryPostingService(
             var reversal = new InventoryMovement(
                 original.CompanyId, original.LegalEntityId, original.ValuationAreaId, sequence, original.ProductId, original.VariantId, original.WarehouseId,
                 original.BatchId, original.SerialId, original.MovementType, -original.Quantity, original.UomId, -original.BaseQuantity, original.UnitCost,
-                -original.TotalCost, reversalDate, original.SourceModule, original.SourceDocType, original.SourceDocId, original.SourceLineId,
+                -valueRemoved, reversalDate, original.SourceModule, original.SourceDocType, original.SourceDocId, original.SourceLineId,
                 original.ReferenceNo, original.Id, null, clock.UtcNow, currentUser.UserId, original.RelatedMovementId);
             db.Movements.Add(reversal);
             created.Add(reversal);
+            await bins.ReverseAsync(original.Id, reversal.Id, cancellationToken);
         }
 
         await db.SaveChangesAsync(cancellationToken);
+
+        if (consumedAdjustments.Count > 0)
+        {
+            var adjustmentJournal = await PostAdjustmentReversalJournalAsync(ctx, sourceDocType, sourceDocId, reversalDate, consumedAdjustments, cancellationToken);
+            if (adjustmentJournal.IsFailure)
+            {
+                return adjustmentJournal.Error;
+            }
+        }
 
         foreach (var purpose in originals.Where(m => m.JournalPurpose is not null).Select(m => m.JournalPurpose!).Distinct())
         {
@@ -912,17 +1118,58 @@ public sealed class InventoryPostingService(
         return await db.Valuations.FirstAsync(v => v.ValuationAreaId == areaId && v.ProductId == productId && v.VariantKey == variantKey, ct);
     }
 
-    private async Task<Result> ReverseValueAsync(ItemValuation valuation, InventoryMovement original, CancellationToken ct)
+    /// <summary>
+    /// The consumed share of reversed FIFO cost adjustments went to cost of sales at the adjusted cost; the source's own journal reversal
+    /// takes the whole adjustment out of Inventory, so the consumed share is put back (Dr Inventory / Cr purchase price variance).
+    /// </summary>
+    private async Task<Result> PostAdjustmentReversalJournalAsync(PostingContextResolver.Resolved ctx, string sourceDocType, Guid sourceDocId, DateOnly date,
+        IReadOnlyList<(InventoryMovement Original, decimal Consumed)> consumed, CancellationToken ct)
+    {
+        var products = (await catalog.GetProductsAsync(consumed.Select(c => c.Original.ProductId).Distinct().ToList(), ct)).ToDictionary(p => p.Id);
+        var lines = new List<JournalLineRequest>();
+        foreach (var (original, amount) in consumed.Where(c => c.Consumed != 0))
+        {
+            var group = products.GetValueOrDefault(original.ProductId)?.PostingGroup;
+            var warehouse = ctx.Warehouses[original.WarehouseId];
+            var stock = new PostingContext(ProductPostingGroup: group, WarehouseId: warehouse.Id);
+            var variance = new PostingContext(ProductPostingGroup: group);
+            var abs = Math.Abs(amount);
+            lines.Add(new JournalLineRequest(StockRole(warehouse), null, amount > 0 ? abs : 0, amount > 0 ? 0 : abs, stock, Description: "Consumed share of reversed cost adjustment"));
+            lines.Add(new JournalLineRequest(PostingRoles.PurchasePriceVariance, null, amount > 0 ? 0 : abs, amount > 0 ? abs : 0, variance, Description: "Consumed share of reversed cost adjustment"));
+        }
+
+        if (lines.Count == 0)
+        {
+            return Result.Success();
+        }
+
+        var result = await journals.PostAsync(new JournalRequest(ctx.LegalEntity.Id, date, SourceModules.Inventory, sourceDocType, sourceDocId, AdjustmentReversalPurpose,
+            "Reversed cost adjustment: share already consumed", ctx.LegalEntity.FunctionalCurrency, 1m, lines), ct);
+        return result.IsSuccess ? Result.Success() : result.Error;
+    }
+
+    /// <returns>The value taken out of the valuation (the original value, except for FIFO cost adjustments on partly consumed layers).</returns>
+    private async Task<Result<decimal>> ReverseValueAsync(ItemValuation valuation, InventoryMovement original, CancellationToken ct)
     {
         var state = valuation.ToState();
         var newQuantity = state.Quantity - original.BaseQuantity;
-        var newValue = state.Value - original.TotalCost;
+        var removed = original.TotalCost;
         if (valuation.CostingMethod == CostingMethods.Fifo)
         {
             if (original.MovementType == InventoryMovementTypes.CostAdjustment && original.RelatedMovementId is { } receiptId)
             {
                 var layer = await db.CostLayers.FirstOrDefaultAsync(l => l.ReceiptMovementId == receiptId, ct);
-                if (layer is { RemainingQuantity: > 0 })
+                var record = await db.CostLayerAdjustments.AsNoTracking().FirstOrDefaultAsync(a => a.MovementId == original.Id, ct);
+                if (layer is not null && record is not null)
+                {
+                    // Exact: only the share of the adjustment still in the layer leaves the valuation.
+                    removed = record.StillInStock(layer.RemainingQuantity);
+                    if (layer.RemainingQuantity > 0)
+                    {
+                        layer.UnitCost = InventoryRounding.Cost(((layer.UnitCost * layer.RemainingQuantity) - removed) / layer.RemainingQuantity);
+                    }
+                }
+                else if (layer is { RemainingQuantity: > 0 })
                 {
                     layer.UnitCost = InventoryRounding.Cost(layer.UnitCost - (original.TotalCost / layer.RemainingQuantity));
                 }
@@ -948,6 +1195,7 @@ public sealed class InventoryPostingService(
             }
         }
 
+        var newValue = state.Value - removed;
         if (newQuantity == 0)
         {
             newValue = 0;
@@ -955,7 +1203,7 @@ public sealed class InventoryPostingService(
 
         var average = newQuantity > 0 ? InventoryRounding.Cost(newValue / newQuantity) : state.AverageCost;
         valuation.Apply(new ValuationState(newQuantity, newValue, average, state.LastCost));
-        return Result.Success();
+        return removed;
     }
 
     // ---------------- Value-only cost adjustment ----------------
@@ -996,6 +1244,7 @@ public sealed class InventoryPostingService(
         var valuation = await LockedValuationAsync(ctx.CompanyId, receipt.ValuationAreaId, receipt.ProductId, Keys.Of(receipt.VariantId), cancellationToken);
         var state = valuation.ToState();
         decimal applied;
+        CostLayer? adjustedLayer = null;
         if (valuation.CostingMethod == CostingMethods.Fifo)
         {
             var layer = await db.CostLayers.FirstOrDefaultAsync(l => l.ReceiptMovementId == receipt.Id, cancellationToken);
@@ -1007,6 +1256,7 @@ public sealed class InventoryPostingService(
             {
                 applied = InventoryRounding.Money(request.Amount * (layer.RemainingQuantity / layer.OriginalQuantity));
                 layer.UnitCost = InventoryRounding.Cost(layer.UnitCost + (applied / layer.RemainingQuantity));
+                adjustedLayer = layer;
             }
         }
         else
@@ -1029,6 +1279,10 @@ public sealed class InventoryPostingService(
                 clock.UtcNow, currentUser.UserId, receipt.Id);
             db.Movements.Add(movement);
             movementId = movement.Id;
+            if (adjustedLayer is not null)
+            {
+                db.CostLayerAdjustments.Add(new CostLayerAdjustment(ctx.CompanyId, adjustedLayer.Id, movement.Id, adjustedLayer.RemainingQuantity, applied));
+            }
         }
 
         await db.SaveChangesAsync(cancellationToken);
@@ -1127,7 +1381,7 @@ public sealed class ReservationService(
 }
 
 /// <summary>Contract implementation of stock queries.</summary>
-public sealed class StockQueries(IInventoryDbContext db, PostingContextResolver contexts) : IStockQueries
+public sealed class StockQueries(IInventoryDbContext db, PostingContextResolver contexts, InventoryPostingService posting) : IStockQueries
 {
     public async Task<IReadOnlyList<StockLevel>> GetStockAsync(IReadOnlyCollection<Guid> productIds, Guid? warehouseId = null, CancellationToken cancellationToken = default)
     {
@@ -1168,6 +1422,9 @@ public sealed class StockQueries(IInventoryDbContext db, PostingContextResolver 
         var areas = await db.Movements.AsNoTracking().Where(m => m.LegalEntityId == legalEntityId).Select(m => m.ValuationAreaId).Distinct().ToListAsync(cancellationToken);
         return await db.Valuations.AsNoTracking().Where(v => areas.Contains(v.ValuationAreaId)).SumAsync(v => v.Value, cancellationToken);
     }
+
+    public Task<IReadOnlyList<ReturnableIssue>> GetReturnableIssuesAsync(string sourceDocType, Guid sourceDocId, Guid sourceLineId, CancellationToken cancellationToken = default) =>
+        posting.GetReturnableIssuesAsync(sourceDocType, sourceDocId, sourceLineId, cancellationToken);
 
     public async Task<MovementInfo?> GetMovementAsync(Guid movementId, CancellationToken cancellationToken = default)
     {

@@ -37,6 +37,8 @@ public static class InventoryPermissions
     public const string DocumentApprove = "inventory.document.approve";
     public const string DocumentPost = "inventory.document.post";
     public const string ReservationManage = "inventory.reservation.manage";
+    public const string BinManage = "inventory.bin.manage";
+    public const string Recost = "inventory.recost";
 }
 
 /// <summary>Batch details for an inbound line of a batch-tracked product (the batch is created on first receipt).</summary>
@@ -52,7 +54,12 @@ public sealed record ReservationRef(string DemandType, Guid DemandId, Guid Deman
 /// <item><see cref="UnitCost"/> (base currency per <b>base</b> unit) is required for inbound lines unless
 /// <see cref="CostSourceMovementId"/> is given; ignored for outbound lines, whose cost comes from the costing engine.</item>
 /// <item><see cref="CostSourceMovementId"/> makes a return use the cost of the original movement (sales return at original issue
-/// cost, purchase return at original receipt cost).</item>
+/// cost, purchase return at original receipt cost). For an inbound return of an issue that left in several movements (batches,
+/// serials) the return is split across all movements of that issue line in proportion to what each can still take back, each
+/// part restocked into its own batch at its own cost.</item>
+/// <item><see cref="TotalCost"/>: inbound only — the exact value to receive (the unit cost is derived), so carried costs leave no residue.</item>
+/// <item><see cref="BinId"/>: bin-managed warehouses only — put-away bin (inbound; default receiving bin when omitted) or pick bin
+/// (outbound; bins are picked automatically when omitted).</item>
 /// <item><see cref="Batch"/>: required inbound for batch-tracked products; optional outbound (FEFO allocation when omitted;
 /// expired batches are never issued).</item>
 /// <item><see cref="Serials"/>: required for serial-tracked products; count must equal the base quantity.</item>
@@ -77,7 +84,9 @@ public sealed record InventoryPostingLine(
     Guid? CostSourceMovementId = null,
     ReservationRef? ConsumeReservation = null,
     Guid? CounterWarehouseId = null,
-    string? CounterRole = null);
+    string? CounterRole = null,
+    decimal? TotalCost = null,
+    Guid? BinId = null);
 
 /// <summary>
 /// A request from a source document. (SourceDocType, SourceDocId) identifies it: posting the same source twice returns the
@@ -177,8 +186,25 @@ public sealed record MovementInfo(
     Guid SourceDocId,
     Guid? SourceLineId);
 
+/// <summary>An issue movement of a source line and how much of it can still be returned (base units).</summary>
+public sealed record ReturnableIssue(
+    Guid MovementId,
+    Guid WarehouseId,
+    string? BatchNumber,
+    string? SerialNumber,
+    decimal IssuedQuantity,
+    decimal ReturnedQuantity,
+    decimal ReturnableQuantity,
+    decimal UnitCost);
+
 public interface IStockQueries
 {
+    /// <summary>
+    /// The outbound movements posted for one source line (e.g. an invoice line) with the quantity already returned against each — what a
+    /// return of that line restocks, batch by batch and at each movement's cost.
+    /// </summary>
+    Task<IReadOnlyList<ReturnableIssue>> GetReturnableIssuesAsync(string sourceDocType, Guid sourceDocId, Guid sourceLineId, CancellationToken cancellationToken = default);
+
     /// <summary>Stock per product/variant/warehouse in base units (batches summed).</summary>
     Task<IReadOnlyList<StockLevel>> GetStockAsync(IReadOnlyCollection<Guid> productIds, Guid? warehouseId = null, CancellationToken cancellationToken = default);
 

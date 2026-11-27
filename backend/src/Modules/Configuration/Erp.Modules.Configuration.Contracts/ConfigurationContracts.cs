@@ -64,6 +64,8 @@ public sealed record InventoryPolicySettings
     public bool EnableExpiryTracking { get; init; } = true;
 
     public bool EnableReservations { get; init; } = true;
+
+    public bool AutoRecostBackdatedPostings { get; init; }
 }
 
 public sealed record SalesPolicySettings
@@ -88,6 +90,8 @@ public sealed record ProcurementPolicySettings
     public decimal PriceTolerancePercent { get; init; } = 2m;
 
     public decimal QuantityTolerancePercent { get; init; }
+
+    public string ReceiptValuationRate { get; init; } = "ReceiptDate";
 }
 
 /// <summary>Reads a company's business policies (any company of the current tenant).</summary>

@@ -53,8 +53,6 @@ public static class ProcurementAppErrors
     public static readonly Error DuplicateSupplierInvoice = Error.Conflict("procurement.duplicate-supplier-invoice", "This supplier invoice number was already entered for the supplier.");
     public static readonly Error PartialInvoicedReceipt = Error.Conflict("procurement.partial-invoiced-receipt",
         "Part of this quantity was invoiced before receipt and part was not. Receive the invoiced quantity in a separate receipt line.");
-    public static readonly Error InvoiceBeforeReceiptReturn = Error.Conflict("procurement.return-invoiced-before-receipt",
-        "Returning goods that were invoiced before receipt is not supported yet; cancel or credit the invoice instead.");
     public static readonly Error InvoiceGoodsReceived = Error.Conflict("procurement.invoice-goods-received",
         "Goods invoiced before receipt have since been received; reverse the receipt first.");
     public static readonly Error ReceiptNotPosted = Error.Conflict("procurement.receipt-not-posted", "Only posted goods receipts can be used.");
