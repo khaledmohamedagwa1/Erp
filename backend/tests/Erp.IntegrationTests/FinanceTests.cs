@@ -345,6 +345,24 @@ public class FinanceTests(ErpApiFixture fixture)
     }
 
     [Fact]
+    public async Task Expense_lines_cannot_use_control_or_revenue_accounts()
+    {
+        var b = await NewBooksAsync();
+        var accounts = (await (await b.T.Client.GetAsCompanyAsync("/api/v1/accounting/accounts", b.T.CompanyId)).Content.ReadFromJsonAsync<JsonElement>(Ct))
+            .EnumerateArray().ToDictionary(a => a.GetProperty("code").GetString()!, a => a.GetProperty("id").GetGuid());
+        foreach (var code in new[] { "2110", "4110" })
+        {
+            var response = await b.T.Client.SendAsCompanyAsync(HttpMethod.Post, "/api/v1/finance/expenses", b.T.CompanyId, new
+            {
+                legalEntityId = b.LegalEntityId, date = "2026-03-31", payee = "Supplier", supplierId = b.SupplierId,
+                lines = new[] { new { accountId = accounts[code], description = "Not an expense", netAmount = 100m } },
+            });
+            response.StatusCode.ShouldBe(System.Net.HttpStatusCode.UnprocessableEntity, code);
+            (await response.ErrorCodeAsync()).ShouldBe("finance.invalid-expense-account");
+        }
+    }
+
+    [Fact]
     public async Task Expense_to_supplier_creates_a_payable_and_transfers_move_cash_with_charges()
     {
         var b = await NewBooksAsync();

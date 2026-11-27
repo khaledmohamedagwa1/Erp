@@ -55,6 +55,8 @@ public static class FinanceAppErrors
     public static readonly Error LegalEntityNotFound = Error.NotFound("finance.legal-entity-not-found", "The legal entity was not found in this company.");
     public static readonly Error PartyNotFound = Error.NotFound("finance.party-not-found", "The customer or supplier was not found or is inactive.");
     public static readonly Error AccountNotFound = Error.NotFound("finance.cash-bank-account-not-found", "The cash/bank account was not found or is inactive.");
+    public static readonly Error InvalidExpenseAccount = Error.Validation("finance.invalid-expense-account",
+        "Expense lines must use an active posting account of type Expense or Asset that is not a control account.");
     public static readonly Error DocumentNotFound = Error.NotFound("finance.document-not-found", "The document was not found.");
     public static readonly Error OpenItemNotFound = Error.NotFound("finance.open-item-not-found", "An open item was not found for this party.");
     public static readonly Error RateMissing = Error.Validation("finance.rate-missing", "No exchange rate is recorded for the currency on this date.");

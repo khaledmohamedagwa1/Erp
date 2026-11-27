@@ -718,11 +718,22 @@ public sealed class CreateExpenseValidator : AbstractValidator<CreateExpenseComm
     }
 }
 
-public sealed class CreateExpenseHandler(IFinanceDbContext db, FinanceScope scope, IPartyQueries parties, ITaxCalculator taxes)
+public sealed class CreateExpenseHandler(IFinanceDbContext db, FinanceScope scope, IPartyQueries parties, ITaxCalculator taxes, IAccountQueries accounts)
     : ICommandHandler<CreateExpenseCommand, ExpenseDto>
 {
     public async Task<Result<ExpenseDto>> Handle(CreateExpenseCommand command, CancellationToken cancellationToken)
     {
+        // Finance is an allowed source for the receivables/payables control accounts, so user-chosen expense accounts
+        // must be checked here: posting accounts of type Expense or Asset (prepayments), never control accounts.
+        foreach (var accountId in command.Lines.Select(l => l.AccountId).Distinct())
+        {
+            var account = await accounts.GetAccountAsync(accountId, cancellationToken);
+            if (account is not { IsActive: true, IsPostingAccount: true, IsControl: false } || account.Type is not ("Expense" or "Asset"))
+            {
+                return FinanceAppErrors.InvalidExpenseAccount;
+            }
+        }
+
         var le = await scope.LegalEntityAsync(command.LegalEntityId, cancellationToken);
         if (le.IsFailure)
         {

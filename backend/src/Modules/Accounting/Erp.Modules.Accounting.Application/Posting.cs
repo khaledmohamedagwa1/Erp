@@ -276,7 +276,7 @@ public sealed class JournalPostingService(
                     accountId = rule.AccountId;
                 }
 
-                journal.AddLine(accountId.Value, line.Debit, line.Credit, line.CostCenterId, line.PartyType, line.PartyId, line.Description);
+                journal.AddLine(accountId.Value, line.Debit, line.Credit, line.CostCenterId, line.PartyType, line.PartyId, line.Description, line.BaseAmount);
             }
         }
         catch (DomainException ex)
@@ -345,6 +345,16 @@ public sealed class JournalPostingService(
 
         return legalEntity;
     }
+}
+
+/// <summary>Chart-of-accounts lookups for other modules. The company query filter keeps it within the active company.</summary>
+public sealed class AccountQueries(IAccountingDbContext db) : IAccountQueries
+{
+    public async Task<AccountInfo?> GetAccountAsync(Guid accountId, CancellationToken cancellationToken = default) =>
+        await db.Accounts.AsNoTracking().Where(a => a.Id == accountId)
+            .Select(a => new AccountInfo(a.Id, a.Code, a.NameEn, a.NameAr, a.Type.ToString(), a.IsPostingAccount,
+                a.ControlSubledger != ControlSubledger.None, a.ControlSubledger.ToString(), a.AllowManualPosting, a.Status == AccountStatus.Active))
+            .FirstOrDefaultAsync(cancellationToken);
 }
 
 public sealed class LedgerQueries(IAccountingDbContext db) : ILedgerQueries

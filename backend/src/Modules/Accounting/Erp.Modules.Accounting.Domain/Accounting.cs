@@ -571,7 +571,7 @@ public sealed class JournalEntry : AggregateRoot, ICompanyScoped
 
     public static decimal ToBase(decimal amount, decimal rate) => Math.Round(amount * rate, 2, MidpointRounding.AwayFromZero);
 
-    public void AddLine(Guid accountId, decimal debit, decimal credit, Guid? costCenterId = null, string? partyType = null, Guid? partyId = null, string? description = null)
+    public void AddLine(Guid accountId, decimal debit, decimal credit, Guid? costCenterId = null, string? partyType = null, Guid? partyId = null, string? description = null, decimal? baseAmount = null)
     {
         EnsureDraft();
         if (debit < 0 || credit < 0 || (debit > 0) == (credit > 0))
@@ -579,8 +579,17 @@ public sealed class JournalEntry : AggregateRoot, ICompanyScoped
             throw new DomainException(AccountingErrors.LineOneSided);
         }
 
+        if (baseAmount is < 0)
+        {
+            throw new DomainException(AccountingErrors.LineOneSided);
+        }
+
+        // A sub-ledger may fix the base amount (original-rate relief); otherwise convert at the journal rate.
+        var fixedBase = baseAmount is null ? (decimal?)null : Math.Round(baseAmount.Value, 2, MidpointRounding.AwayFromZero);
+        var baseDebit = debit > 0 ? fixedBase ?? ToBase(debit, ExchangeRate) : 0m;
+        var baseCredit = credit > 0 ? fixedBase ?? ToBase(credit, ExchangeRate) : 0m;
         _lines.Add(new JournalLine(SequentialGuid.New(), Id, _lines.Count + 1, accountId, debit, credit,
-            ToBase(debit, ExchangeRate), ToBase(credit, ExchangeRate), costCenterId, partyType, partyId, description));
+            baseDebit, baseCredit, costCenterId, partyType, partyId, description));
     }
 
     public void ClearLines()

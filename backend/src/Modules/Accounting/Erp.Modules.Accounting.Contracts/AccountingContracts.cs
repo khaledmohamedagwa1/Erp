@@ -120,6 +120,9 @@ public sealed record PostingContext(
 /// One journal line. Give either <see cref="Role"/> (normal for module postings) or <see cref="AccountId"/>
 /// (for an account chosen by the user or a sub-ledger, e.g. a specific bank account).
 /// Amounts are in the journal's transaction currency; exactly one of Debit/Credit is positive.
+/// <see cref="BaseAmount"/> optionally fixes the functional-currency amount of the line instead of converting at the
+/// journal rate — used by sub-ledgers that relieve an open item at its original rate while cash moves at today's rate.
+/// The journal must still balance in base currency (residuals up to 0.01 go to FxRoundingDifference).
 /// </summary>
 public sealed record JournalLineRequest(
     string? Role,
@@ -130,7 +133,26 @@ public sealed record JournalLineRequest(
     Guid? CostCenterId = null,
     string? PartyType = null,
     Guid? PartyId = null,
-    string? Description = null);
+    string? Description = null,
+    decimal? BaseAmount = null);
+
+public sealed record AccountInfo(
+    Guid Id,
+    string Code,
+    string NameEn,
+    string NameAr,
+    string Type,
+    bool IsPostingAccount,
+    bool IsControl,
+    string ControlSubledger,
+    bool AllowManualPosting,
+    bool IsActive);
+
+/// <summary>Read access to the chart of accounts for other modules (e.g. to validate a user-chosen expense account).</summary>
+public interface IAccountQueries
+{
+    Task<AccountInfo?> GetAccountAsync(Guid accountId, CancellationToken cancellationToken = default);
+}
 
 /// <summary>
 /// A posting request from a source document. (LegalEntityId, SourceDocType, SourceDocId, Purpose) is unique:
