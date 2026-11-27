@@ -64,6 +64,9 @@ public sealed class WorkCenter : AggregateRoot, ICompanyScoped
 
     public OverheadBasis OverheadBasis { get; private set; }
 
+    /// <summary>Working days for capacity planning (<see cref="WorkingDays"/> bit mask; all days by default).</summary>
+    public int WorkingDaysMask { get; private set; } = WorkingDays.All;
+
     public bool IsActive { get; private set; }
 
     public static WorkCenter Create(Guid companyId, string code, string nameEn, string nameAr, decimal capacity, decimal labor, decimal machine, decimal overhead, OverheadBasis basis)
@@ -89,7 +92,24 @@ public sealed class WorkCenter : AggregateRoot, ICompanyScoped
         OverheadBasis = basis;
     }
 
+    public void SetWorkingDays(int mask)
+    {
+        if (mask is < 0 or > WorkingDays.All)
+        {
+            throw new DomainException(ManufacturingErrors.Invalid("manufacturing.working-days-invalid", "Invalid working days."));
+        }
+
+        WorkingDaysMask = mask;
+    }
+
     public void Deactivate() => IsActive = false;
+
+    /// <summary>
+    /// Standard conversion cost per planned hour, unrounded: an operation is assumed to occupy labour and machine for its planned
+    /// hours; overhead follows the work center's basis (both bases equal the planned hours).
+    /// </summary>
+    public (decimal Labor, decimal Machine, decimal Overhead) StandardCost(decimal plannedHours) =>
+        (plannedHours * LaborRatePerHour, plannedHours * MachineRatePerHour, plannedHours * OverheadRatePerHour);
 
     /// <summary>Conversion cost of reported hours, each component rounded to cents.</summary>
     public (decimal Labor, decimal Machine, decimal Overhead) Cost(decimal laborHours, decimal machineHours) =>
@@ -228,7 +248,23 @@ public sealed class BomLine
 
     public IssueMethod IssueMethod { get; set; } = IssueMethod.Manual;
 
+    /// <summary>Alternative components in priority order (first = preferred), substituted 1:1 in base units when this one is short.</summary>
     public List<Guid> Alternatives { get; set; } = [];
+
+    /// <summary>Optional variant of the component to issue.</summary>
+    public Guid? ComponentVariantId { get; set; }
+
+    /// <summary>
+    /// Variant condition: the line applies only to output variants having all these attribute values (e.g. Size = L).
+    /// Null or empty = all variants (and the product without variants).
+    /// </summary>
+    public Dictionary<string, string>? AppliesTo { get; set; }
+
+    public bool AppliesToVariant(IReadOnlyDictionary<string, string>? attributes) =>
+        AppliesTo is not { Count: > 0 } ||
+        (attributes is not null && AppliesTo.All(c => attributes.Any(a =>
+            string.Equals(a.Key.Trim(), c.Key.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(a.Value.Trim(), c.Value.Trim(), StringComparison.OrdinalIgnoreCase))));
 }
 
 public enum BomVersionStatus
@@ -388,7 +424,12 @@ public sealed class BomVersion : AggregateRoot, ICompanyScoped
     }
 }
 
-public sealed record ComponentRequirement(Guid LineId, Guid ProductId, Guid UomId, IssueMethod IssueMethod, decimal QuantityPerUnit, decimal Quantity);
+public sealed record ComponentRequirement(Guid LineId, Guid ProductId, Guid UomId, IssueMethod IssueMethod, decimal QuantityPerUnit, decimal Quantity)
+{
+    public Guid? VariantId { get; init; }
+
+    public IReadOnlyList<Guid> Alternatives { get; init; } = [];
+}
 
 /// <summary>Pure BOM arithmetic and graph checks.</summary>
 public static class BomCalculator
@@ -397,11 +438,16 @@ public static class BomCalculator
     /// Component quantities for <paramref name="outputQuantity"/> base units of output:
     /// qty = output / bomOutput × qtyPerOutput × (1 + scrap%) / yield%. Rounded to 6 decimals, half away from zero.
     /// </summary>
-    public static IReadOnlyList<ComponentRequirement> Explode(BomVersion version, decimal outputQuantity) =>
-        version.Lines.Select(line =>
+    /// <remarks>Lines with a variant condition are included only when <paramref name="variantAttributes"/> satisfy it.</remarks>
+    public static IReadOnlyList<ComponentRequirement> Explode(BomVersion version, decimal outputQuantity, IReadOnlyDictionary<string, string>? variantAttributes = null) =>
+        version.Lines.Where(line => line.AppliesToVariant(variantAttributes)).Select(line =>
         {
             var perUnit = line.QuantityPerOutput / version.OutputQuantity * (1 + (line.ScrapPercent / 100m)) / (version.ExpectedYieldPercent / 100m);
-            return new ComponentRequirement(line.LineId, line.ComponentProductId, line.UomId, line.IssueMethod, perUnit, MfgRounding.Quantity(perUnit * outputQuantity));
+            return new ComponentRequirement(line.LineId, line.ComponentProductId, line.UomId, line.IssueMethod, perUnit, MfgRounding.Quantity(perUnit * outputQuantity))
+            {
+                VariantId = line.ComponentVariantId,
+                Alternatives = line.Alternatives,
+            };
         }).ToList();
 
     /// <summary>The version effective on the date among the BOM versions of one product (latest start wins if data is inconsistent).</summary>

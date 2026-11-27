@@ -8,40 +8,43 @@ namespace Erp.Modules.Manufacturing.Application;
 
 // ---------- DTOs ----------
 public sealed record WorkCenterDto(Guid Id, string Code, string NameEn, string NameAr, decimal CapacityHoursPerDay, decimal LaborRatePerHour,
-    decimal MachineRatePerHour, decimal OverheadRatePerHour, string OverheadBasis, bool IsActive);
+    decimal MachineRatePerHour, decimal OverheadRatePerHour, string OverheadBasis, bool IsActive, IReadOnlyList<string> WorkingDays);
 
 public sealed record RoutingOperationDto(int Sequence, string Name, Guid WorkCenterId, decimal SetupHours, decimal RunHoursPerUnit);
 
 public sealed record RoutingDto(Guid Id, Guid ProductId, string Code, string Name, bool IsActive, IReadOnlyList<RoutingOperationDto> Operations);
 
-public sealed record BomLineDto(Guid LineId, Guid ComponentProductId, decimal QuantityPerOutput, Guid UomId, decimal ScrapPercent, string IssueMethod, IReadOnlyList<Guid> Alternatives);
+public sealed record BomLineDto(Guid LineId, Guid ComponentProductId, decimal QuantityPerOutput, Guid UomId, decimal ScrapPercent, string IssueMethod, IReadOnlyList<Guid> Alternatives,
+    Guid? ComponentVariantId, IReadOnlyDictionary<string, string>? AppliesTo);
 
 public sealed record BomVersionDto(Guid Id, Guid BomId, Guid ProductId, int VersionNo, DateOnly EffectiveFrom, DateOnly? EffectiveTo, string Status,
     decimal OutputQuantity, decimal ExpectedYieldPercent, IReadOnlyList<BomLineDto> Lines);
 
 public sealed record BomDto(Guid Id, Guid ProductId, string Code, string Name, IReadOnlyList<BomVersionDto> Versions);
 
-public sealed record PlanningParametersDto(Guid Id, Guid ProductId, decimal SafetyStock, int LeadTimeDays, string LotSizeRule, decimal LotSize, string? Procurement);
+public sealed record PlanningParametersDto(Guid Id, Guid ProductId, decimal SafetyStock, int LeadTimeDays, string LotSizeRule, decimal LotSize, string? Procurement,
+    string? CostingMethod, Guid? PreferredSupplierId);
 
 internal static class SetupMapping
 {
     public static WorkCenterDto ToDto(WorkCenter w) => new(w.Id, w.Code, w.NameEn, w.NameAr, w.CapacityHoursPerDay, w.LaborRatePerHour,
-        w.MachineRatePerHour, w.OverheadRatePerHour, w.OverheadBasis.ToString(), w.IsActive);
+        w.MachineRatePerHour, w.OverheadRatePerHour, w.OverheadBasis.ToString(), w.IsActive, Domain.WorkingDays.ToNames(w.WorkingDaysMask));
 
     public static RoutingDto ToDto(Routing r) => new(r.Id, r.ProductId, r.Code, r.Name, r.IsActive,
         r.Operations.Select(o => new RoutingOperationDto(o.Sequence, o.Name, o.WorkCenterId, o.SetupHours, o.RunHoursPerUnit)).ToList());
 
     public static BomVersionDto ToDto(BomVersion v) => new(v.Id, v.BomId, v.ProductId, v.VersionNo, v.EffectiveFrom, v.EffectiveTo, v.Status.ToString(),
         v.OutputQuantity, v.ExpectedYieldPercent,
-        v.Lines.Select(l => new BomLineDto(l.LineId, l.ComponentProductId, l.QuantityPerOutput, l.UomId, l.ScrapPercent, l.IssueMethod.ToString(), l.Alternatives)).ToList());
+        v.Lines.Select(l => new BomLineDto(l.LineId, l.ComponentProductId, l.QuantityPerOutput, l.UomId, l.ScrapPercent, l.IssueMethod.ToString(), l.Alternatives,
+            l.ComponentVariantId, l.AppliesTo)).ToList());
 
     public static PlanningParametersDto ToDto(ItemPlanningParameters p) =>
-        new(p.Id, p.ProductId, p.SafetyStock, p.LeadTimeDays, p.LotSizeRule.ToString(), p.LotSize, p.Procurement?.ToString());
+        new(p.Id, p.ProductId, p.SafetyStock, p.LeadTimeDays, p.LotSizeRule.ToString(), p.LotSize, p.Procurement?.ToString(), p.CostingMethod?.ToString(), p.PreferredSupplierId);
 }
 
 // ---------- Work centers ----------
 public sealed record SaveWorkCenterCommand(Guid? Id, string Code, string NameEn, string NameAr, decimal CapacityHoursPerDay, decimal LaborRatePerHour,
-    decimal MachineRatePerHour, decimal OverheadRatePerHour, string? OverheadBasis) : ICommand<WorkCenterDto>;
+    decimal MachineRatePerHour, decimal OverheadRatePerHour, string? OverheadBasis, IReadOnlyList<string>? WorkingDays = null) : ICommand<WorkCenterDto>;
 
 public sealed class SaveWorkCenterValidator : AbstractValidator<SaveWorkCenterCommand>
 {
@@ -51,6 +54,7 @@ public sealed class SaveWorkCenterValidator : AbstractValidator<SaveWorkCenterCo
         RuleFor(x => x.NameEn).NotEmpty().MaximumLength(200);
         RuleFor(x => x.NameAr).NotEmpty().MaximumLength(200);
         RuleFor(x => x.OverheadBasis).Must(b => b is null || Enum.TryParse<OverheadBasis>(b, true, out _)).WithMessage("OverheadBasis must be LaborHours or MachineHours.");
+        RuleForEach(x => x.WorkingDays).Must(d => Enum.TryParse<DayOfWeek>(d, true, out _)).WithMessage("Working days must be day names (Sunday … Saturday).");
     }
 }
 
@@ -76,6 +80,11 @@ public sealed class SaveWorkCenterHandler(IManufacturingDbContext db, Manufactur
             wc = WorkCenter.Create(support.CompanyId, code, command.NameEn, command.NameAr, command.CapacityHoursPerDay, command.LaborRatePerHour,
                 command.MachineRatePerHour, command.OverheadRatePerHour, basis);
             db.WorkCenters.Add(wc);
+        }
+
+        if (command.WorkingDays is { } days)
+        {
+            wc.SetWorkingDays(Domain.WorkingDays.FromNames(days));
         }
 
         await db.SaveChangesAsync(cancellationToken);
@@ -196,7 +205,8 @@ public sealed class CreateBomHandler(IManufacturingDbContext db, ManufacturingSu
     }
 }
 
-public sealed record BomLineInput(Guid? LineId, Guid ComponentProductId, decimal QuantityPerOutput, Guid UomId, decimal ScrapPercent, string? IssueMethod, IReadOnlyList<Guid>? Alternatives);
+public sealed record BomLineInput(Guid? LineId, Guid ComponentProductId, decimal QuantityPerOutput, Guid UomId, decimal ScrapPercent, string? IssueMethod, IReadOnlyList<Guid>? Alternatives,
+    Guid? ComponentVariantId = null, IReadOnlyDictionary<string, string>? AppliesTo = null);
 
 public sealed record SaveBomVersionCommand(Guid BomId, Guid? VersionId, DateOnly EffectiveFrom, DateOnly? EffectiveTo, decimal OutputQuantity, decimal? ExpectedYieldPercent,
     IReadOnlyList<BomLineInput> Lines) : ICommand<BomVersionDto>;
@@ -244,7 +254,9 @@ public sealed class SaveBomVersionHandler(IManufacturingDbContext db, Manufactur
             UomId = l.UomId,
             ScrapPercent = l.ScrapPercent,
             IssueMethod = l.IssueMethod is null ? IssueMethod.Manual : Enum.Parse<IssueMethod>(l.IssueMethod, true),
-            Alternatives = l.Alternatives?.ToList() ?? [],
+            Alternatives = l.Alternatives?.Distinct().Where(a => a != l.ComponentProductId).ToList() ?? [],
+            ComponentVariantId = l.ComponentVariantId,
+            AppliesTo = l.AppliesTo is { Count: > 0 } a ? new Dictionary<string, string>(a) : null,
         });
         BomVersion version;
         if (command.VersionId is { } id)
@@ -338,8 +350,8 @@ public sealed class GetBomHandler(IManufacturingDbContext db) : IQueryHandler<Ge
 }
 
 // ---------- Planning parameters ----------
-public sealed record SavePlanningParametersCommand(Guid ProductId, decimal SafetyStock, int LeadTimeDays, string? LotSizeRule, decimal LotSize, string? Procurement)
-    : ICommand<PlanningParametersDto>;
+public sealed record SavePlanningParametersCommand(Guid ProductId, decimal SafetyStock, int LeadTimeDays, string? LotSizeRule, decimal LotSize, string? Procurement,
+    string? CostingMethod = null, Guid? PreferredSupplierId = null) : ICommand<PlanningParametersDto>;
 
 public sealed class SavePlanningParametersValidator : AbstractValidator<SavePlanningParametersCommand>
 {
@@ -348,10 +360,12 @@ public sealed class SavePlanningParametersValidator : AbstractValidator<SavePlan
         RuleFor(x => x.ProductId).NotEmpty();
         RuleFor(x => x.LotSizeRule).Must(r => r is null || Enum.TryParse<LotSizeRule>(r, true, out _)).WithMessage("LotSizeRule must be LotForLot, FixedMinimum or Multiple.");
         RuleFor(x => x.Procurement).Must(p => p is null || Enum.TryParse<ProcurementType>(p, true, out _)).WithMessage("Procurement must be Make or Buy.");
+        RuleFor(x => x.CostingMethod).Must(m => m is null || Enum.TryParse<ManufacturingCostingMethod>(m, true, out _)).WithMessage("CostingMethod must be Actual or Standard.");
     }
 }
 
-public sealed class SavePlanningParametersHandler(IManufacturingDbContext db, ManufacturingSupport support) : ICommandHandler<SavePlanningParametersCommand, PlanningParametersDto>
+public sealed class SavePlanningParametersHandler(IManufacturingDbContext db, ManufacturingSupport support, Erp.Modules.Parties.Contracts.IPartyQueries parties)
+    : ICommandHandler<SavePlanningParametersCommand, PlanningParametersDto>
 {
     public async Task<Result<PlanningParametersDto>> Handle(SavePlanningParametersCommand command, CancellationToken cancellationToken)
     {
@@ -359,6 +373,11 @@ public sealed class SavePlanningParametersHandler(IManufacturingDbContext db, Ma
         if (products.IsFailure)
         {
             return products.Error;
+        }
+
+        if (command.PreferredSupplierId is { } supplierId && await parties.GetSupplierAsync(supplierId, cancellationToken) is not { IsActive: true })
+        {
+            return Error.Validation("manufacturing.supplier-invalid", "The preferred supplier was not found or is inactive.");
         }
 
         var parameters = await db.PlanningParameters.FirstOrDefaultAsync(p => p.ProductId == command.ProductId, cancellationToken);
@@ -370,7 +389,8 @@ public sealed class SavePlanningParametersHandler(IManufacturingDbContext db, Ma
 
         parameters.Update(command.SafetyStock, command.LeadTimeDays,
             command.LotSizeRule is null ? LotSizeRule.LotForLot : Enum.Parse<LotSizeRule>(command.LotSizeRule, true), command.LotSize,
-            command.Procurement is null ? null : Enum.Parse<ProcurementType>(command.Procurement, true));
+            command.Procurement is null ? null : Enum.Parse<ProcurementType>(command.Procurement, true),
+            command.CostingMethod is null ? null : Enum.Parse<ManufacturingCostingMethod>(command.CostingMethod, true), command.PreferredSupplierId);
         await db.SaveChangesAsync(cancellationToken);
         return SetupMapping.ToDto(parameters);
     }

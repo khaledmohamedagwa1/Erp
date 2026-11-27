@@ -15,6 +15,33 @@ public enum ProductionOrderStatus
     Cancelled = 8,
 }
 
+public enum ProductionOrderType
+{
+    Standard = 1,
+
+    /// <summary>Reworks defective units of a product: the defective item itself is the main component; always actual costing.</summary>
+    Rework = 2,
+}
+
+/// <summary>A component substitution recorded on the order (manual or automatic at release).</summary>
+public sealed class ProductionSubstitution
+{
+    public Guid OriginalLineId { get; set; }
+
+    public Guid SubstituteLineId { get; set; }
+
+    public Guid OriginalProductId { get; set; }
+
+    public Guid SubstituteProductId { get; set; }
+
+    /// <summary>Base units moved from the original component to the substitute.</summary>
+    public decimal BaseQuantity { get; set; }
+
+    public DateOnly Date { get; set; }
+
+    public bool Automatic { get; set; }
+}
+
 /// <summary>A component requirement snapshotted from the BOM version at planning. Quantities in <see cref="UomId"/> unless noted.</summary>
 public sealed class ProductionComponent
 {
@@ -42,6 +69,17 @@ public sealed class ProductionComponent
 
     /// <summary>Base quantity reserved at release and not yet consumed or released.</summary>
     public decimal OpenReservedBase { get; set; }
+
+    public Guid? VariantId { get; set; }
+
+    /// <summary>Standard cost per base unit of the component (from the active cost version) for standard-costed orders.</summary>
+    public decimal? StandardUnitCost { get; set; }
+
+    /// <summary>Alternative components in priority order (from the BOM line).</summary>
+    public List<Guid> Alternatives { get; set; } = [];
+
+    /// <summary>Set on a substitute line: the line it replaces (partly).</summary>
+    public Guid? SubstituteForLineId { get; set; }
 
     public decimal RemainingQuantity => Math.Max(0, RequiredQuantity - IssuedQuantity);
 }
@@ -91,6 +129,15 @@ public sealed class ProductionTransaction
     public Guid? JournalId { get; set; }
 
     public string? Reference { get; set; }
+
+    /// <summary>Operation reports: the work center and the cost split (used by period-end absorption clearing).</summary>
+    public Guid? WorkCenterId { get; set; }
+
+    public decimal LaborAmount { get; set; }
+
+    public decimal MachineAmount { get; set; }
+
+    public decimal OverheadAmount { get; set; }
 }
 
 [Audited]
@@ -154,6 +201,40 @@ public sealed class ProductionOrder : AggregateRoot, ICompanyScoped
 
     public string? SourceReference { get; private set; }
 
+    public ProductionOrderType OrderType { get; private set; } = ProductionOrderType.Standard;
+
+    /// <summary>Output variant (null for products without variants).</summary>
+    public Guid? VariantId { get; private set; }
+
+    /// <summary>For rework orders: the order whose output is reworked (optional).</summary>
+    public Guid? ReworkOfOrderId { get; private set; }
+
+    public ManufacturingCostingMethod CostingMethod { get; private set; } = ManufacturingCostingMethod.Actual;
+
+    public Guid? CostVersionId { get; private set; }
+
+    public decimal StandardMaterialUnitCost { get; private set; }
+
+    public decimal StandardLaborUnitCost { get; private set; }
+
+    public decimal StandardMachineUnitCost { get; private set; }
+
+    public decimal StandardOverheadUnitCost { get; private set; }
+
+    public decimal StandardConversionUnitCost => MfgRounding.Cost(StandardLaborUnitCost + StandardMachineUnitCost + StandardOverheadUnitCost);
+
+    public decimal StandardUnitCost => MfgRounding.Cost(StandardMaterialUnitCost + StandardConversionUnitCost);
+
+    public decimal MaterialPriceVariance { get; private set; }
+
+    public decimal MaterialUsageVariance { get; private set; }
+
+    public decimal ConversionVariance { get; private set; }
+
+    public decimal OtherVariance { get; private set; }
+
+    public List<ProductionSubstitution> Substitutions { get; private set; } = [];
+
     public List<ProductionComponent> Components { get; private set; } = [];
 
     public List<ProductionOperation> Operations { get; private set; } = [];
@@ -165,7 +246,8 @@ public sealed class ProductionOrder : AggregateRoot, ICompanyScoped
     public bool IsOpenForWork => Status is ProductionOrderStatus.Released or ProductionOrderStatus.InProgress or ProductionOrderStatus.PartiallyCompleted or ProductionOrderStatus.Completed;
 
     public static ProductionOrder Create(Guid companyId, string number, Guid productId, Guid legalEntityId, Guid componentWarehouseId, Guid outputWarehouseId,
-        decimal quantity, DateOnly startDate, DateOnly dueDate, string? sourceReference = null)
+        decimal quantity, DateOnly startDate, DateOnly dueDate, string? sourceReference = null, Guid? variantId = null,
+        ProductionOrderType orderType = ProductionOrderType.Standard, Guid? reworkOfOrderId = null)
     {
         if (quantity <= 0)
         {
@@ -187,24 +269,72 @@ public sealed class ProductionOrder : AggregateRoot, ICompanyScoped
             StartDate = startDate,
             DueDate = dueDate,
             SourceReference = sourceReference,
+            VariantId = variantId,
+            OrderType = orderType,
+            ReworkOfOrderId = reworkOfOrderId,
         };
     }
 
     /// <summary>Snapshots the BOM version and routing: later changes to them do not affect this order.</summary>
-    public void Plan(BomVersion version, IReadOnlyDictionary<Guid, decimal> uomFactors, Routing? routing)
+    public void Plan(BomVersion version, IReadOnlyDictionary<Guid, decimal> uomFactors, Routing? routing, IReadOnlyDictionary<string, string>? variantAttributes = null)
     {
         Require(ProductionOrderStatus.Draft);
+        if (OrderType != ProductionOrderType.Standard)
+        {
+            throw new DomainException(ManufacturingErrors.InvalidTransition);
+        }
+
         BomVersionId = version.Id;
+        SetRequirements(BomCalculator.Explode(version, PlannedQuantity, variantAttributes), uomFactors, routing);
+    }
+
+    /// <summary>Plans a rework order: the defective product itself (1 : 1) plus optional extra components and the routing's operations.</summary>
+    public void PlanRework(IReadOnlyList<ComponentRequirement> components, IReadOnlyDictionary<Guid, decimal> uomFactors, Routing? routing)
+    {
+        Require(ProductionOrderStatus.Draft);
+        if (OrderType != ProductionOrderType.Rework)
+        {
+            throw new DomainException(ManufacturingErrors.InvalidTransition);
+        }
+
+        SetRequirements(components, uomFactors, routing);
+    }
+
+    /// <summary>Switches a planned order to standard costing with the standards of the active cost version.</summary>
+    public void UseStandardCost(Guid costVersionId, StandardCostItem product, IReadOnlyDictionary<Guid, decimal> componentStandards)
+    {
+        Require(ProductionOrderStatus.Planned);
+        if (OrderType != ProductionOrderType.Standard)
+        {
+            throw new DomainException(ManufacturingErrors.Invalid("manufacturing.rework-actual-only", "Rework orders are always costed at actual."));
+        }
+
+        CostingMethod = ManufacturingCostingMethod.Standard;
+        CostVersionId = costVersionId;
+        StandardMaterialUnitCost = product.Material;
+        StandardLaborUnitCost = product.Labor;
+        StandardMachineUnitCost = product.Machine;
+        StandardOverheadUnitCost = product.Overhead;
+        foreach (var component in Components)
+        {
+            component.StandardUnitCost = componentStandards.TryGetValue(component.ProductId, out var std) ? std : null;
+        }
+    }
+
+    private void SetRequirements(IReadOnlyList<ComponentRequirement> requirements, IReadOnlyDictionary<Guid, decimal> uomFactors, Routing? routing)
+    {
         RoutingId = routing?.Id;
-        Components = BomCalculator.Explode(version, PlannedQuantity).Select(r => new ProductionComponent
+        Components = requirements.Select(r => new ProductionComponent
         {
             LineId = r.LineId,
             ProductId = r.ProductId,
+            VariantId = r.VariantId,
             UomId = r.UomId,
             UomFactor = uomFactors.GetValueOrDefault(r.LineId, 1m),
             IssueMethod = r.IssueMethod,
             QuantityPerUnit = r.QuantityPerUnit,
             RequiredQuantity = r.Quantity,
+            Alternatives = r.Alternatives.ToList(),
         }).ToList();
         Operations = routing?.Operations.Select(o => new ProductionOperation
         {
@@ -223,6 +353,68 @@ public sealed class ProductionOrder : AggregateRoot, ICompanyScoped
     }
 
     public void SetReserved(Guid lineId, decimal baseQuantity) => Component(lineId).OpenReservedBase = baseQuantity;
+
+    /// <summary>
+    /// Moves <paramref name="baseQuantity"/> (base units) of a component's remaining requirement to an alternative component, 1 : 1
+    /// in base units. The substitute gets its own line (in the alternative's base unit) carrying the moved share of the standard
+    /// quantity, so standard usage and variances stay correct. Returns the substitute line.
+    /// </summary>
+    public ProductionComponent Substitute(Guid lineId, Guid alternativeProductId, Guid alternativeBaseUomId, decimal baseQuantity, DateOnly date, bool automatic,
+        decimal? alternativeStandardCost)
+    {
+        if (Status is not (ProductionOrderStatus.Planned or ProductionOrderStatus.Released or ProductionOrderStatus.InProgress or ProductionOrderStatus.PartiallyCompleted))
+        {
+            throw new DomainException(ManufacturingErrors.InvalidTransition);
+        }
+
+        var original = Component(lineId);
+        if (!original.Alternatives.Contains(alternativeProductId))
+        {
+            throw new DomainException(ManufacturingErrors.Invalid("manufacturing.not-an-alternative", "The product is not an alternative of this component in the BOM."));
+        }
+
+        var remainingBase = MfgRounding.Quantity(original.RemainingQuantity * original.UomFactor);
+        if (baseQuantity <= 0 || baseQuantity > remainingBase)
+        {
+            throw new DomainException(ManufacturingErrors.Invalid("manufacturing.substitution-quantity-invalid",
+                "The quantity must be positive and at most the component's remaining requirement."));
+        }
+
+        var fraction = original.RequiredQuantity <= 0 ? 0 : baseQuantity / (original.RequiredQuantity * original.UomFactor);
+        var movedPerUnitBase = original.QuantityPerUnit * original.UomFactor * fraction;
+        original.RequiredQuantity = MfgRounding.Quantity(original.RequiredQuantity - (baseQuantity / original.UomFactor));
+        original.QuantityPerUnit -= movedPerUnitBase / original.UomFactor;
+
+        var existing = Components.FirstOrDefault(c => c.SubstituteForLineId == lineId && c.ProductId == alternativeProductId);
+        if (existing is null)
+        {
+            existing = new ProductionComponent
+            {
+                LineId = SequentialGuid.New(),
+                ProductId = alternativeProductId,
+                UomId = alternativeBaseUomId,
+                UomFactor = 1m,
+                IssueMethod = original.IssueMethod,
+                SubstituteForLineId = lineId,
+                StandardUnitCost = CostingMethod == ManufacturingCostingMethod.Standard ? alternativeStandardCost : null,
+            };
+            Components.Add(existing);
+        }
+
+        existing.QuantityPerUnit += movedPerUnitBase;
+        existing.RequiredQuantity = MfgRounding.Quantity(existing.RequiredQuantity + baseQuantity);
+        Substitutions.Add(new ProductionSubstitution
+        {
+            OriginalLineId = lineId,
+            SubstituteLineId = existing.LineId,
+            OriginalProductId = original.ProductId,
+            SubstituteProductId = alternativeProductId,
+            BaseQuantity = baseQuantity,
+            Date = date,
+            Automatic = automatic,
+        });
+        return existing;
+    }
 
     public ProductionComponent Component(Guid lineId) =>
         Components.FirstOrDefault(c => c.LineId == lineId)
@@ -263,6 +455,11 @@ public sealed class ProductionOrder : AggregateRoot, ICompanyScoped
         MachineCost = MfgRounding.Money(MachineCost + machine);
         OverheadCost = MfgRounding.Money(OverheadCost + overhead);
         AddTransaction(transactionId, ProductionTransactionKind.OperationReport, date, laborHours + machineHours, total, journalId, $"op {sequence}");
+        var transaction = Transactions[^1];
+        transaction.WorkCenterId = operation.WorkCenterId;
+        transaction.LaborAmount = labor;
+        transaction.MachineAmount = machine;
+        transaction.OverheadAmount = overhead;
         MarkInProgress();
     }
 
@@ -275,6 +472,11 @@ public sealed class ProductionOrder : AggregateRoot, ICompanyScoped
         if (quantity <= 0)
         {
             throw new DomainException(ManufacturingErrors.Invalid("manufacturing.quantity-invalid", "The quantity must be positive."));
+        }
+
+        if (CostingMethod == ManufacturingCostingMethod.Standard)
+        {
+            return StandardUnitCost;
         }
 
         var spread = Math.Max(OpenQuantity, quantity);
@@ -316,11 +518,19 @@ public sealed class ProductionOrder : AggregateRoot, ICompanyScoped
     }
 
     /// <summary>Closes the order: the residual WIP (already journalled by the caller) is recorded as variance; WIP ends at zero.</summary>
-    public void Close(Guid transactionId, DateOnly date, Guid? journalId)
+    public void Close(Guid transactionId, DateOnly date, Guid? journalId, StandardVariances? variances = null)
     {
         if (Status is not (ProductionOrderStatus.Completed or ProductionOrderStatus.PartiallyCompleted or ProductionOrderStatus.InProgress))
         {
             throw new DomainException(ManufacturingErrors.InvalidTransition);
+        }
+
+        if (variances is not null)
+        {
+            MaterialPriceVariance = variances.MaterialPrice;
+            MaterialUsageVariance = variances.MaterialUsage;
+            ConversionVariance = variances.Conversion;
+            OtherVariance = variances.Other;
         }
 
         if (WipBalance != 0)

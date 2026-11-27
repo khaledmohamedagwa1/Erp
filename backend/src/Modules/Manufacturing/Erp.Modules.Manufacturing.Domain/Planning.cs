@@ -49,9 +49,16 @@ public sealed class ItemPlanningParameters : AggregateRoot, ICompanyScoped
     /// <summary>Null: make when the product has an effective BOM, otherwise buy.</summary>
     public ProcurementType? Procurement { get; private set; }
 
+    /// <summary>Null: the company default (<see cref="ManufacturingSettings.DefaultCostingMethod"/>).</summary>
+    public ManufacturingCostingMethod? CostingMethod { get; private set; }
+
+    /// <summary>Supplier for purchase orders created from MRP purchase suggestions.</summary>
+    public Guid? PreferredSupplierId { get; private set; }
+
     public static ItemPlanningParameters Create(Guid companyId, Guid productId) => new(SequentialGuid.New(), companyId, productId);
 
-    public void Update(decimal safetyStock, int leadTimeDays, LotSizeRule rule, decimal lotSize, ProcurementType? procurement)
+    public void Update(decimal safetyStock, int leadTimeDays, LotSizeRule rule, decimal lotSize, ProcurementType? procurement,
+        ManufacturingCostingMethod? costingMethod = null, Guid? preferredSupplierId = null)
     {
         if (safetyStock < 0 || leadTimeDays < 0 || lotSize < 0 || (rule != LotSizeRule.LotForLot && lotSize <= 0))
         {
@@ -64,6 +71,8 @@ public sealed class ItemPlanningParameters : AggregateRoot, ICompanyScoped
         LotSizeRule = rule;
         LotSize = lotSize;
         Procurement = procurement;
+        CostingMethod = costingMethod;
+        PreferredSupplierId = preferredSupplierId;
     }
 }
 
@@ -111,6 +120,9 @@ public sealed class MrpSuggestion
     public SuggestionStatus Status { get; set; } = SuggestionStatus.Open;
 
     public Guid? ProductionOrderId { get; set; }
+
+    /// <summary>Set when a purchase suggestion was converted into a draft purchase order.</summary>
+    public Guid? PurchaseOrderId { get; set; }
 
     public List<PeggingEntry> Pegging { get; set; } = [];
 }
@@ -171,11 +183,24 @@ public sealed class MrpRun : AggregateRoot, ICompanyScoped
         if (suggestion.Status != SuggestionStatus.Open || suggestion.Action != SuggestionAction.Produce)
         {
             throw new DomainException(ManufacturingErrors.Invalid("manufacturing.suggestion-not-convertible",
-                "Only open production suggestions can be converted; purchase suggestions stay proposals until purchasing is connected."));
+                "Only open production suggestions can be converted here; convert purchase suggestions with convert-purchases."));
         }
 
         suggestion.Status = SuggestionStatus.Converted;
         suggestion.ProductionOrderId = productionOrderId;
+    }
+
+    public void MarkPurchased(Guid suggestionId, Guid purchaseOrderId)
+    {
+        var suggestion = Suggestion(suggestionId);
+        if (suggestion.Status != SuggestionStatus.Open || suggestion.Action != SuggestionAction.Purchase)
+        {
+            throw new DomainException(ManufacturingErrors.Invalid("manufacturing.suggestion-not-convertible",
+                "Only open purchase suggestions can be converted into purchase orders."));
+        }
+
+        suggestion.Status = SuggestionStatus.Converted;
+        suggestion.PurchaseOrderId = purchaseOrderId;
     }
 }
 

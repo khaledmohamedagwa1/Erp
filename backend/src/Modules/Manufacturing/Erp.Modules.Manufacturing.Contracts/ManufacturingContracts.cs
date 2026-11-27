@@ -7,6 +7,7 @@ public static class ManufacturingPermissions
     public const string OrderManage = "manufacturing.order.manage";
     public const string OrderPost = "manufacturing.order.post";
     public const string PlanningRun = "manufacturing.planning.run";
+    public const string CostingManage = "manufacturing.costing.manage";
 }
 
 /// <summary>Open production supply (output not yet received) and demand (components not yet issued) of one product, base units.</summary>

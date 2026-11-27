@@ -4,22 +4,15 @@ Schema `manufacturing`, migration order 130, module code `manufacturing`. The mo
 
 The module covers:
 
-- **Setup:** work centers, routings, and bills of materials with versions.
-- **Production orders:** Draft through Closed, including WIP accounting.
-- **Basic MRP:** infinite capacity, low-level codes, netting, safety stock, lot sizing, lead-time offset, pegging and a shortage list.
+- **Setup:** work centers (rates, daily capacity, working days), routings, and bills of materials with versions, alternatives and variant-specific lines.
+- **Production orders:** Draft through Closed, including WIP accounting, at **actual or standard cost**, rework orders and component substitution.
+- **Cost accounting:** standard cost versions with roll-up, activation with stock revaluation, variance split at close, and period-end absorption clearing of applied labour, machine and overhead.
+- **MRP:** low-level codes, netting, safety stock, lot sizing, lead-time offset, pegging and a shortage list; conversion of production suggestions into production orders and of purchase suggestions into draft purchase orders.
+- **Capacity:** work-center load against capacity per day, with a finite schedule that flags late orders and proposes finish dates.
 
-All stock moves go through `IInventoryPostingService` and `IReservationService`. All journals go through `IJournalPostingService`. The module never writes another module's tables.
+All stock moves go through `IInventoryPostingService`, `IInventoryRevaluationService` and `IReservationService`. All journals go through `IJournalPostingService`. Purchase orders are created through `IPurchaseOrderDraftService` and variants are read through `ICatalogVariantService`. The module never writes another module's tables.
 
-> **Not implemented: full manufacturing cost accounting.** Labour, machine and overhead are *applied* to WIP at the work-center rates (Dr WIP / Cr Applied Labour, Applied Machine, Applied Overhead).
->
-> The following are **not** implemented:
->
-> - Clearing the applied accounts against actual payroll and overhead spending (absorption/spending variance analysis).
-> - Standard costing with price, usage or efficiency variance splits.
-> - Activity-based costing.
-> - Revaluation of finished goods after close.
->
-> The Applied* accounts therefore build up credit balances. Finance must clear them manually against the actual expense accounts. Order-level residual WIP goes to a single ProductionVariance account, or to AbnormalScrap.
+> ⚖️ **Review with an accountant before production use:** the standard-cost conventions below (what is a price versus a usage variance, where revaluation differences go, absorption clearing against expense accounts) are recommended defaults, not jurisdiction-specific rules.
 
 ## Contracts (`Erp.Modules.Manufacturing.Contracts`)
 
@@ -28,6 +21,7 @@ public static class ManufacturingPermissions
 {
     Read = "manufacturing.read"; SetupManage = "manufacturing.setup.manage"; OrderManage = "manufacturing.order.manage";
     OrderPost = "manufacturing.order.post" /* sensitive */; PlanningRun = "manufacturing.planning.run";
+    CostingManage = "manufacturing.costing.manage" /* sensitive: activates standards (revalues stock) and posts absorption */;
 }
 
 public interface IManufacturingQueries
@@ -37,117 +31,156 @@ public interface IManufacturingQueries
 }
 
 // MRP extension points: register more implementations in DI and the next MRP run picks them up.
-public sealed record MrpDemand(Guid ProductId, decimal Quantity, DateOnly DueDate, string SourceType, string SourceReference);
-public sealed record MrpSupply(Guid ProductId, decimal Quantity, DateOnly DueDate, string SourceType, string SourceReference);
 public interface IMrpDemandSource { string Name { get; } Task<IReadOnlyList<MrpDemand>> GetDemandAsync(Guid companyId, DateOnly horizonEnd, CancellationToken ct = default); }
 public interface IMrpSupplySource { string Name { get; } Task<IReadOnlyList<MrpSupply>> GetSupplyAsync(Guid companyId, DateOnly horizonEnd, CancellationToken ct = default); }
 ```
 
 Quantities in `MrpDemand` and `MrpSupply` are in the product's **base UOM**.
 
-### Pluggable sources (to wire after merge)
+### Contracts this module uses from other modules (added in wave 6)
+
+| Contract | Owner | Use |
+|---|---|---|
+| `IInventoryRevaluationService.RevalueAsync` | Inventory | Revalues everything on hand of a product in a legal entity to a new unit cost (value-only `CostAdjustment` movement per valuation area; FIFO layers still open take the new cost; journal Dr Inventory / Cr gain role or Dr loss role / Cr Inventory). Idempotent per (source doc, product). |
+| `IPurchaseOrderDraftService.CreateDraftAsync` | Procurement | Sends Procurement's regular create-purchase-order command (Draft, same validation, numbering and tax). |
+| `ICatalogVariantService` | Catalog | Reads variants with their attribute values; `GenerateVariantsAsync` creates the missing combinations (also exposed as `POST /api/v1/catalog/products/{id}/variants/generate`). |
+
+### MRP sources
 
 | Source | Registered implementation | Status |
 |---|---|---|
 | Production orders (component demand and FG supply) | `ProductionOrderMrpSource` (`production-orders`) | Live |
-| Sales orders (independent demand) | `SalesOrderMrpSource` (`sales-orders`) | Confirmed, undelivered lines from `ISalesQueries.GetAllOpenDemandAsync`, minus the part already reserved in stock (from `IReservationService`), within the horizon |
-| Purchase orders (scheduled receipts) | `PurchaseOrderMrpSource` (`purchase-orders`) | Open approved/sent/partially received PO lines from `IProcurementQueries.GetAllOpenSupplyAsync`, dated at the expected date (today if none), within the horizon |
-
-When Sales and Procurement are merged, each of them should do two things:
-
-- Implement `IMrpDemandSource` / `IMrpSupplySource` from its open order lines.
-- Replace the placeholder registration in `ManufacturingModule.Register` with its own implementation, or register the implementation from its own module and delete the placeholder.
-
-Until then, MRP plans only against stock on hand, production orders and safety stock. The integration tests inject demand through a test `IMrpDemandSource`.
+| Sales orders (independent demand) | `SalesOrderMrpSource` (`sales-orders`) | Confirmed, undelivered lines minus the part already reserved in stock |
+| Purchase orders (scheduled receipts) | `PurchaseOrderMrpSource` (`purchase-orders`) | Open approved/sent/partially received PO lines at their expected date (today if none) |
 
 ## Domain
 
 | Aggregate | Notes |
 |---|---|
-| `WorkCenter` | Labour, machine and overhead rates per hour, stored as decimal(19,6). The overhead basis is `LaborHours` or `MachineHours`. `Cost(labourH, machineH)` returns (labour, machine, overhead). |
-| `Routing` | A product plus operations (sequence, work center, setup hours, run hours per unit), stored as a JSON column. |
-| `BillOfMaterials` / `BomVersion` | A version has a number, an effective-from/to range, output quantity, expected yield %, and lines (component, quantity per output, UOM, scrap %, issue method `Manual`/`Backflush`, alternative components). Statuses: Draft → Active → Superseded / Obsolete. |
-| `ProductionOrder` | Number `MO-…`, component and output warehouses, snapshots of components and operations, a transaction history, and a WIP balance. |
-| `ItemPlanningParameters` | Safety stock, lead time in days, lot rule (`LotForLot`, `FixedMinimum`, `Multiple`) with lot size, and procurement type (`Make` / `Buy`). |
-| `MrpRun` | Number `MRP-…`, run date, horizon, suggestions with pegging, and shortages. |
+| `WorkCenter` | Labour, machine and overhead rates per hour (decimal(19,6)), overhead basis `LaborHours`/`MachineHours`, capacity hours per day and **working days** (bit mask, default all seven days). |
+| `Routing` | A product plus operations (sequence, work center, setup hours, run hours per unit), JSON column. |
+| `BillOfMaterials` / `BomVersion` | Version number, effective range, output quantity, expected yield %, lines (component, quantity per output, UOM, scrap %, issue method, **alternatives in priority order**, optional **component variant**, optional **variant condition** `appliesTo` such as `{"Size":"L"}`). Draft → Active → Superseded / Obsolete. |
+| `ProductionOrder` | Number `MO-…`, **type** `Standard`/`Rework`, optional output **variant**, warehouses, component and operation snapshots, transactions, substitutions, WIP balance, **costing method** with the standards it was planned with, and the variance split at close. |
+| `ItemPlanningParameters` | Safety stock, lead time, lot rule and size, procurement type, **costing method override** and **preferred supplier**. |
+| `ManufacturingSettings` | Company default costing method (`Actual` until set). |
+| `CostVersion` | Code, name, effective date, Draft → Approved → Active → Superseded; standard cost items per product (material, labour, machine, overhead per base unit; source `Manual`, `RollUp` or `CurrentCost`). |
+| `CostPool` | Kind (`Labor`, `Machine`, `Overhead`), work centers, actual expense accounts (each account in at most one pool). |
+| `AbsorptionRun` | Legal entity, period, applied/actual/variance per pool, journal. One per legal entity and period. |
+| `MrpRun` | Run date, horizon, suggestions (with production order or purchase order once converted), shortages. |
 
 ### BOM rules
 
-- **Explosion:** required quantity per unit = `quantityPerOutput / outputQuantity × (1 + scrap%) ÷ (yield% / 100)`, rounded to 6 dp. Requirements are kept in the line's UOM. Production orders also snapshot the UOM factor to the base UOM.
-- **Activation checks:**
-  - **Cycles:** activation builds the graph of all *usable* versions (Active or Superseded) across all BOMs, adds the candidate, and refuses a multi-level cycle (`manufacturing.bom-cycle`). A component equal to its own output is refused when the version is created.
-  - **Dates:** activation refuses a date range that overlaps another usable version (`manufacturing.bom-version-overlap`). The one exception is an earlier *open-ended* version: it is closed at `from − 1` and becomes Superseded.
-- **Effective version:** a usable version whose range contains the date. If several match, the one with the latest start wins.
+- **Explosion:** required quantity per unit = `quantityPerOutput / outputQuantity × (1 + scrap%) ÷ (yield% / 100)`, rounded to 6 dp, in the line's UOM. Lines with a variant condition are included only when the order's variant has all the listed attribute values (case-insensitive); orders without a variant include only unconditional lines.
+- **Activation checks:** multi-level cycles (`manufacturing.bom-cycle`) and overlapping date ranges (`manufacturing.bom-version-overlap`), except that an earlier open-ended version is closed at `from − 1` and superseded.
+- **Effective version:** a usable version whose range contains the date; the latest start wins.
 
 ## Production order lifecycle and accounting
 
-`Draft → Planned → Released → InProgress → PartiallyCompleted → Completed → Closed`. An order can move to `Cancelled` from Draft, Planned or Released, provided no stock has moved.
+`Draft → Planned → Released → InProgress → PartiallyCompleted → Completed → Closed`, or `Cancelled` from Draft, Planned or Released when no stock has moved.
 
-| Step | Effect | Journal (via inventory `PostJournal`, counter role `WorkInProgress`, or a direct journal) |
+| Step | Effect | Journal |
 |---|---|---|
-| **Plan** | Snapshots the effective BOM version (or the one given) and the active routing (or the one given): component requirements with UOM factors, and planned operation hours. | — |
-| **Release** | Reserves each component through `IReservationService` (demand type `ProductionOrder`, demand line = BOM line id). The reservation is capped at the stock available now; the rest is left to MRP. | — |
-| **Issue** (`/issues`) | Inventory movement `ProductionIssue` out of the component warehouse. Consumes the reservation. | Dr WIP / Cr Inventory, at inventory cost |
-| **Return** (`/returns`) | Inventory movement back in, at the line's average issued cost. A return cannot exceed what was issued. | Dr Inventory / Cr WIP |
-| **Report operation** | Work-center hours × rates. | Dr WIP / Cr AppliedLabor, AppliedMachine, AppliedOverhead |
-| **Receive FG** | First backflushes the `Backflush` components owed for the output so far (`min(required, perUnit × (completed + scrapped)) − issued`). Then receives the FG at **unit cost = WIP balance ÷ max(remaining quantity, received quantity)**. | Backflush: Dr WIP / Cr Inventory. Receipt: Dr Inventory / Cr WIP |
-| **Scrap** | Normal scrap only: records the quantity, and its cost stays in WIP. Later receipts absorb it, because the remaining WIP is spread over the remaining good output. | — |
-| **Close** | Backflushes anything still owed for reported output, releases every open reservation, then posts the residual WIP. | Residual > 0: Dr ProductionVariance (or AbnormalScrap when `abnormalScrap: true`) / Cr WIP. Residual < 0: the reverse |
+| **Plan** | Snapshots the effective BOM version (filtered by the order's variant) and the active routing. If the product is standard-costed, also snapshots the active cost version's standards for the product and its components (`manufacturing.no-standard-cost` when missing). | — |
+| **Release** | **Substitutes** short components with their alternatives (see below), then reserves each component line, capped at available stock. | — |
+| **Issue / Return** | Inventory `ProductionIssue` / `ProductionReturn` (with the component variant). | Dr WIP / Cr Inventory, or the reverse |
+| **Report operation** | Hours × rates; the transaction records the work center and the labour/machine/overhead split (used by absorption clearing). | Dr WIP / Cr AppliedLabor, AppliedMachine, AppliedOverhead |
+| **Receive FG** | Backflush, then receipt (with the output variant). Unit cost: **actual** = WIP ÷ max(remaining, received); **standard** = the order's standard unit cost. | Dr Inventory / Cr WIP |
+| **Scrap** | Normal scrap quantity; cost stays in WIP. | — |
+| **Close** | Backflush owed components, release reservations, post the residual WIP. **Actual:** residual to ProductionVariance (or AbnormalScrap). **Standard:** residual split into variances (below), unless `abnormalScrap: true`. | see below |
 
-Invariants:
+Invariants: `Σ transactions.wipAmount = WipBalance`; WIP is 0 after close; the WIP account accepts only `manufacturing` postings.
 
-- Every transaction stores its signed WIP amount, so `Σ transactions.wipAmount = WipBalance`. This equals the order's movements on the WIP control account.
-- The WIP account (template 1350) allows only `manufacturing` postings.
-- After close, `WipBalance = 0`.
+## Standard costing
 
-Worked example (S-3 / J-9 in the integration tests):
+**Method:** each product uses its item override (`PUT /planning-parameters` with `costingMethod`), else the company default (`PUT /settings`). Rework orders always use actual cost.
 
-- **BOM:** 2 X + 3 Y + 1 Z per FG. The order is for 100.
-- **Materials:** X 200 @5 + Y 300 @2 + Z 100 @4 = 2,000.
-- **Operation:** 10 labour h @30 + 8 machine h @50 + overhead 8 machine h @25 = 900.
-- **Receipts:** receiving 60 gives 1,740, and receiving 40 gives 1,160. FG is valued at 2,900, and WIP ends at 0.
+**Cost versions:** `POST /cost-versions` (Draft) → `PUT /cost-versions/{id}/items` (manual standards, typically for purchased materials) → `POST /cost-versions/{id}/roll-up` → `POST …/approve` (or `…/reopen`) → `POST …/activate`.
 
-Every material, backflush and receipt event posts under its own source document id (`SequentialGuid`), because inventory needs a unique `(SourceDocType, SourceDocId)` pair. The doc types are `manufacturing.material-issue`, `…material-return`, `…backflush`, `…operation`, `…finished-goods-receipt` and `…close`.
+**Roll-up** (bottom-up, recursive, cycle-safe), per base unit:
+
+- **Manufactured product** (effective BOM on the version's date): costing lot = the item's lot size, else the BOM output quantity.
+  - material = Σ exploded component base quantity for the lot × component standard ÷ lot;
+  - labour / machine / overhead = Σ routing hours for the lot (setup + run × lot) × the work center's labour / machine / overhead rate ÷ lot. An operation is assumed to occupy labour and machine for its planned hours.
+- **Purchased component:** the manual standard if entered, else the current average (else last) inventory cost in `costWarehouseId` (`CurrentCost`, with a note when no cost is found).
+- Manual items are kept unless `overwriteManual: true`. Variant-conditional BOM lines are not included: standards are per product, not per variant.
+
+**Activation** (`manufacturing.costing.manage`, step-up and `Idempotency-Key` required): supersedes the active version and **revalues the stock on hand** of every standard-costed product in the given legal entity to its new standard: Dr Inventory / Cr InventoryAdjustmentGain for an increase, Dr InventoryAdjustmentLoss / Cr Inventory for a decrease. The version cannot be activated before its effective date. Orders already planned keep the standards they were planned with.
+
+**Variance split at close** (positive = unfavourable, debit):
+
+| Variance | Formula | Role |
+|---|---|---|
+| Material price | Σ over components with a standard: actual issued cost − actual base quantity × component standard | `PurchasePriceVariance` |
+| Material usage | Σ (actual base quantity − standard base quantity for the good output) × component standard (components without a standard: their actual average issue cost) | `MaterialUsageVariance` |
+| Conversion | actual applied labour + machine + overhead − standard conversion × good output | `ConversionCostVariance` |
+| Other | residual − the three above (product material standard differing from its components' standards, rounding) | `ProductionVariance` |
+
+Credit WIP with the residual; the four lines sum to it exactly. Price variance arises only for components whose stock is not itself kept at standard (e.g. purchased items left on actual costing), because standard-costed stock is revalued to standard on activation.
+
+Worked example (integration test): standards X 4.8, Y 2, Z 4.5, FG 20.1 material + 3.3 labour + 5.5 machine + 2.75 overhead = 31.65. 100 planned, 5 scrapped, 95 good. Actual: X 200 @5, Y 300 @2, Z 100 @4.5, conversion 1,110 = 3,160. Received 95 × 31.65 = 3,006.75; residual 153.25 = price 40 + usage 100.5 + conversion 12.75 + other 0.
+
+## Absorption clearing
+
+`POST /cost-pools` defines pools: kind, work centers and actual expense accounts (active, non-control expense posting accounts, each in one pool only). For a legal entity and period, `GET /absorption-runs/preview` and `POST /absorption-runs` compute per pool:
+
+- **applied** = labour / machine / overhead recorded on operation reports of the pool's work centers dated in the period;
+- **actual** = net debits on the pool's expense accounts in the period (excluding earlier clearing journals);
+- **variance** = actual − applied (positive = under-absorbed).
+
+Posting (`manufacturing.costing.manage`, `Idempotency-Key`) journals, dated at the period end: Dr the applied account (applied), Cr each expense account (its actual), Dr/Cr `AbsorptionVariance` (the difference). The applied and expense accounts are cleared for the period. One run per legal entity and period; overlapping periods are refused (`manufacturing.absorption-already-posted`).
+
+## Component substitution
+
+BOM line alternatives are substituted **1 : 1 in base units**:
+
+- **Automatically at release:** for each component whose remaining requirement exceeds the available stock in the component warehouse, the shortfall moves to alternatives with available stock, in priority order.
+- **Manually:** `POST /production-orders/{id}/substitute` (`lineId`, `alternativeProductId`, `baseQuantity` ≤ remaining). On a released order the original's reservation is reduced and the alternative reserved as far as stock allows.
+
+The substitute gets its own component line (`substituteForLineId`) carrying the moved share of the standard quantity per unit, so standard usage and variances remain correct; each substitution is recorded on the order (`substitutions`, `automatic` flag).
+
+## Rework orders
+
+`POST /rework-orders`: product (and variant), quantity, component warehouse (e.g. a quarantine store), optional output warehouse, routing, source order and extra components. The order is created **Planned** with the defective product itself as the main component (1 : 1) plus the extras, and the routing's operations. It is then released, issued, reported and received like any order, always at actual cost.
 
 ## MRP
 
-The `RunMrpCommand` takes an optional run date (default today) and an optional horizon in days (default 56). It runs these steps:
+`RunMrpCommand` (run date, horizon, default 56 days) collects demand and supply from the registered sources, builds the BOM graph and low-level codes, nets each product in low-level order against available stock (on hand − reserved), plans lot-sized orders whenever projected stock drops below safety stock (due on the requirement date, ordered lead-time days earlier, flagged late when before the run date), and explodes planned production into dependent demand. MRP itself plans at **infinite capacity**; use the capacity load to check it.
 
-1. Collects demand and supply from every registered source. Demand beyond the horizon is ignored.
-2. Builds the BOM graph from usable versions, and computes low-level codes (the deepest use of each product).
-3. Processes products in low-level-code order:
-   - Starting from available stock (on hand − reserved, all warehouses of the company), it merges scheduled receipts and requirements by date, with receipts first on the same day.
-   - Whenever projected stock drops below safety stock, it plans `LotSize(shortfall)`, due on the requirement date. The order-by date is `due − lead time`.
-   - An order whose order-by date is before the run date is flagged late and listed as a shortage.
-4. A *Make* item explodes its planned order into dependent demand for its components, dated at the order-by date (clamped to the run date) and pegged as `PlannedProduction`.
-   - Procurement type defaults to *Make* when the product has a BOM, and to *Buy* otherwise.
-   - A Make item without a usable BOM becomes a shortage.
-5. Stores the result as an `MrpRun`, with suggestions (Produce or Purchase, quantity, due date, order-by date, late flag, pegging) and shortages.
+- **`POST /mrp-runs/{id}/convert`:** open *Produce* suggestions → Draft production orders (source reference `MRP <number>`).
+- **`POST /mrp-runs/{id}/convert-purchases`:** open *Purchase* suggestions → **Draft purchase orders**, one per supplier: the item's preferred supplier, else `defaultSupplierId` (`manufacturing.supplier-required` when neither). Lines are in the base unit at the last (else average) cost in the warehouse, expected on the suggestion's due date. The suggestion records the purchase order id.
 
-**Converting** (`/mrp-runs/{id}/convert`) turns open *Produce* suggestions into Draft production orders, with source reference `MRP <number>`. Purchase suggestions stay suggestions until procurement is wired (`manufacturing.suggestion-not-convertible`).
+## Capacity
 
-Open production-order component demand counts only the part not already reserved. Reserved stock is already excluded from available stock, so counting it again would double it.
+`GET /capacity-load?from&to&mrpRunId` (default 28 days from today):
+
+- **Load:** remaining hours of each operation of open orders (planned − max(reported labour, machine hours)), plus — with `mrpRunId` — routing hours of the run's open Produce suggestions, spread evenly over the work center's working days between start and due date, compared with capacity per day (`overloaded`).
+- **Finite schedule:** orders in due-date order take the earliest free capacity from their start date; `proposedFinish` is when their last hours fit and `late` is set when that is after the due date (`unschedulable` when a work center has no capacity).
+
+The load is a check and a proposal: dates on orders are not changed automatically.
 
 ## Endpoints (`/api/v1/manufacturing`)
 
 | Method & path | Permission |
 |---|---|
-| `GET /work-centers`, `GET /routings`, `GET /boms`, `GET /boms/{id}`, `GET /planning-parameters`, `GET /production-orders`, `GET /production-orders/{id}`, `GET /mrp-runs`, `GET /mrp-runs/{id}` | `manufacturing.read` |
-| `POST /work-centers`, `PUT /work-centers/{id}`, `POST /routings`, `PUT /routings/{id}`, `POST /boms`, `POST /boms/{id}/versions`, `PUT /boms/{id}/versions/{versionId}`, `POST /boms/{id}/versions/{versionId}/activate`, `POST …/obsolete`, `PUT /planning-parameters` | `manufacturing.setup.manage` |
-| `POST /production-orders`, `POST /production-orders/{id}/plan`, `/release`, `/cancel` | `manufacturing.order.manage` |
-| `POST /production-orders/{id}/issues`, `/returns`, `/operations`, `/receipts`, `/scrap`, `/close` | `manufacturing.order.post`, **`.RequireIdempotency()`** (an `Idempotency-Key` header is required) |
-| `POST /mrp-runs`, `POST /mrp-runs/{id}/convert` | `manufacturing.planning.run` |
+| `GET /work-centers`, `/routings`, `/boms`, `/boms/{id}`, `/planning-parameters`, `/production-orders`, `/production-orders/{id}`, `/mrp-runs`, `/mrp-runs/{id}`, `/capacity-load`, `/settings`, `/cost-versions`, `/cost-versions/{id}`, `/cost-pools`, `/absorption-runs`, `/absorption-runs/preview` | `manufacturing.read` |
+| `POST/PUT /work-centers`, `/routings`, `POST /boms`, BOM versions (`POST`, `PUT`, `…/activate`, `…/obsolete`), `PUT /planning-parameters` | `manufacturing.setup.manage` |
+| `POST /production-orders`, `…/plan`, `…/release`, `…/cancel`, `…/substitute`, `POST /rework-orders` | `manufacturing.order.manage` |
+| `POST /production-orders/{id}/issues`, `/returns`, `/operations`, `/receipts`, `/scrap`, `/close` | `manufacturing.order.post` + `Idempotency-Key` |
+| `POST /mrp-runs`, `…/convert`, `…/convert-purchases` | `manufacturing.planning.run` |
+| `PUT /settings`, `POST /cost-versions`, `PUT …/items`, `POST …/roll-up`, `…/approve`, `…/reopen`, `POST/PUT /cost-pools` | `manufacturing.costing.manage` |
+| `POST /cost-versions/{id}/activate` | `manufacturing.costing.manage` + step-up + `Idempotency-Key` |
+| `POST /absorption-runs` | `manufacturing.costing.manage` + `Idempotency-Key` |
 
 ## Decisions and limitations
 
-- **Cost accounting:** full manufacturing cost accounting is **not implemented** (see the note at the top). Only applied-rate absorption and a single residual variance at close exist.
-- **Receipt costing:** the order's own average cost, `WIP ÷ remaining quantity`. Inventory computes the receipt total from the unit cost, so the last receipt can leave a rounding residual of a few hundredths. Close posts that residual to ProductionVariance.
-- **Backflush:** proportional to *reported* output (completed + scrapped). A short close does **not** consume the backflush components of units that were never produced. Their reservations are released.
-- **Scrap:** only normal scrap is modelled as a quantity; its cost is absorbed by the good output. Abnormal loss is written off at close with `abnormalScrap: true`, which sends the whole residual to AbnormalScrap.
-- **Variants:** not supported. Production lines post with `VariantId = null`.
-- **Batches and serials:** batches and serials on component issues and FG receipts are passed through to inventory.
-- **Release reservations:** release reserves only the stock available at that moment; it does not fail when stock is short.
-- **Capacity:** MRP assumes infinite capacity. There is no capacity planning or operation scheduling; work-center capacity hours are informational.
-- **Alternatives:** alternative components on BOM lines are stored, but MRP and issues do not substitute them automatically.
-- **Sources:** sales-order demand and purchase-order supply are connected (see above). Planned purchase suggestions still cannot be converted into purchase orders automatically.
-- **Concurrency:** posting actions run inside the idempotency transaction, and orders carry a row version. No range locks are taken on rows that may not exist.
+- **Standards are per product, not per variant;** variant-conditional BOM lines are excluded from the roll-up. Standard costs per variant would need a variant key on cost items.
+- **Revaluation** on activation covers one legal entity per call and posts to InventoryAdjustmentGain/Loss (no separate revaluation-variance role). Stock received *after* activation by other modules (purchases) still enters at its actual cost under the inventory costing method; the difference to standard shows as material price variance when issued to production. Inventory itself remains on weighted average/FIFO — "standard" applies to production receipts and revaluation, not to purchase receipts.
+- **Price variance** is posted to `PurchasePriceVariance` (shared with procurement), not a separate material-price role.
+- **Absorption** uses operation reports recorded from this version on (earlier transactions lack the work-center cost split). Expense accounts are cleared in full for the period; spending accrued in another period is not apportioned.
+- **Substitution** is 1 : 1 in base units; there is no conversion ratio between a component and its alternative, and MRP does not substitute (it plans the original component).
+- **Capacity** is a report with proposals: it does not reschedule orders, ignores operation sequencing within an order (operations are loaded independently from the order start) and treats setup as part of the remaining hours.
+- **Rework** is actual-cost only and does not link the defective units to a quality-inspection record (no QC module).
+- **Receipt costing (actual):** `WIP ÷ remaining quantity`; rounding residuals go to ProductionVariance at close.
+- **Backflush:** proportional to reported output (completed + scrapped).
+- **Release reservations** never fail on shortage; the unreserved rest is left to MRP.
+- **Concurrency:** posting actions run inside the idempotency transaction, and orders carry a row version. No range locks on rows that may not exist (ADR-029).
