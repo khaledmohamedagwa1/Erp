@@ -1,6 +1,6 @@
 # API Contracts and Conventions (Deliverable 17)
 
-> Status: **Phase 2 endpoints implemented** (see §6). This file is updated in every phase with the endpoints actually implemented.
+> Status: **all backend modules implemented** (≈ 365 endpoints). §6 details the platform endpoints; §7 indexes every module's endpoints, documented in `docs/modules/`. The live OpenAPI document is served at `/openapi/v1.json` (Development, or `OpenApi:Enabled=true`).
 
 ## 1. General conventions
 
@@ -125,7 +125,7 @@ Idempotency-Key: 0b9b2c1e-…
 
 Errors: `409 period-closed`, `409 inventory.insufficient-stock`, `409 posting-rule-missing`, `409 credit-limit-exceeded`, `409 invalid-state-transition`, `412`, `422`.
 
-## 6. Implemented endpoints (Phase 2)
+## 6. Platform endpoints (Phase 2)
 
 All `/api/v1` endpoints except sign-in require `Authorization: Bearer`. "Company" means the `X-Company-Id` header is required and validated.
 
@@ -157,3 +157,29 @@ All `/api/v1` endpoints except sign-in require `Authorization: Bearer`. "Company
 | `PUT /api/v1/configuration/policies/{section}` | `configuration.policy.manage` | ✔ | Requires `If-Match` (428 if missing, 412 if stale); validated (422). |
 | `GET /health/live`, `GET /health/ready` | anonymous | — | Readiness checks the database. |
 | `GET /openapi/v1.json`, `/swagger` | Development only | — | |
+
+
+Additional platform endpoints added later: `POST /api/v1/auth/mfa/verify`, MFA enrolment/confirm/disable, password change and admin reset, `POST /api/v1/auth/password/complete-change`, user deactivate/reactivate — see [docs/modules/platform.md](docs/modules/platform.md). State-changing posting endpoints across modules require `Idempotency-Key` (422 `idempotency.key-required` when missing, replay with `Idempotency-Replayed: true`).
+
+## 7. Module endpoint index
+
+| Module | Base path | Module code (switchable?) | Endpoints | Reference |
+|---|---|---|---|---|
+| Organization | `/api/v1/organization`, `/api/platform/tenants` | organization (core) | 10 | §6 |
+| Identity | `/api/v1/auth`, `/api/v1/me`, `/api/v1/identity` | identity (core) | 21 | §6, [platform.md](docs/modules/platform.md) |
+| Configuration | `/api/v1/configuration` | configuration (core) | 4 | §6 |
+| Catalog & pricing | `/api/v1/catalog` | catalog (core) | 24 | [catalog.md](docs/modules/catalog.md) |
+| Parties | `/api/v1/parties` | parties (core) | 22 | [parties.md](docs/modules/parties.md) |
+| Tax & currency | `/api/v1/tax` | tax (core) | 14 | [tax.md](docs/modules/tax.md) |
+| Accounting | `/api/v1/accounting` | accounting (core) | 36 | [accounting.md](docs/modules/accounting.md) |
+| Finance | `/api/v1/finance` | finance (core) | 26 | [finance.md](docs/modules/finance.md) |
+| Inventory | `/api/v1/inventory` | inventory (optional) | 40 | [inventory.md](docs/modules/inventory.md) |
+| Procurement | `/api/v1/procurement` | procurement (optional) | 40 | [procurement.md](docs/modules/procurement.md) |
+| Sales | `/api/v1/sales` | sales (optional) | 33 | [sales.md](docs/modules/sales.md) |
+| POS | `/api/v1/pos` | pos (optional; needs sales + inventory) | 20 | [pos.md](docs/modules/pos.md) |
+| Manufacturing | `/api/v1/manufacturing` | manufacturing (optional; needs inventory + procurement) | 31 | [manufacturing.md](docs/modules/manufacturing.md) |
+| Workflow | `/api/v1/workflow` | workflow (core) | 17 | [workflow.md](docs/modules/workflow.md) |
+| Fixed assets | `/api/v1/assets` | fixed-assets (optional) | 20 | [fixed-assets.md](docs/modules/fixed-assets.md) |
+| Reporting | `/api/v1/reports` | reporting (core) | 6 + report keys | [reporting.md](docs/modules/reporting.md) |
+
+Optional modules return 404 `module-disabled` when switched off for the active company. Endpoint counts are the number of mapped routes per module at the time of writing.

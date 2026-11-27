@@ -2,10 +2,10 @@
 
 Angular + ASP.NET Core + SQL Server · Modular Monolith · Clean Architecture · DDD · Double-Entry Accounting · Cloud SaaS & On-Premises
 
-> **Current phase: Phase 2 (Platform foundation) — backend implemented and tested; frontend not started.**
-> See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) and [backend/README.md](backend/README.md).
-> Business modules (Phase 3+) still wait on the open policy decisions in
-> [`docs/business/03-open-questions-and-missing-requirements.md`](docs/business/03-open-questions-and-missing-requirements.md).
+> **Status: backend implemented and tested for every module (522 automated tests); Angular frontend not started.**
+> See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md), [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) and [backend/README.md](backend/README.md).
+> Business-policy decisions were taken with the recommended defaults — [docs/business/05-decisions-log.md](docs/business/05-decisions-log.md);
+> items marked ⚖️ need review by an accountant / tax adviser before production use.
 
 ## Document map
 
@@ -29,6 +29,10 @@ Angular + ASP.NET Core + SQL Server · Modular Monolith · Clean Architecture ·
 | — | Business requirements, glossary, NFRs | [docs/business/02-requirements-glossary-nfr.md](docs/business/02-requirements-glossary-nfr.md) |
 | — | Missing requirements & open questions | [docs/business/03-open-questions-and-missing-requirements.md](docs/business/03-open-questions-and-missing-requirements.md) |
 | — | Testing strategy | [docs/architecture/08-testing-strategy.md](docs/architecture/08-testing-strategy.md) |
+| — | Decisions log (resolved open questions) | [docs/business/05-decisions-log.md](docs/business/05-decisions-log.md) |
+| — | Module implementation conventions | [docs/architecture/09-module-conventions.md](docs/architecture/09-module-conventions.md) |
+| — | Module reference (as built) | [docs/modules/](docs/modules/) |
+| — | Operations runbook | [docs/operations/runbook.md](docs/operations/runbook.md) |
 
 ## Living governance documents (Part 25)
 

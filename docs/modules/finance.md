@@ -95,10 +95,10 @@ payments, requested allocations as JSON), `InternalTransfer`, `Expense` (lines a
 
 ## Limitations
 
-* **Expense-line accounts are not type-checked** by Finance: Accounting.Contracts exposes no account lookup. The posting engine rejects
+* Expense lines are validated through `Accounting.Contracts.IAccountQueries`: only active, non-control posting accounts of type Expense or Asset are accepted (`finance.invalid-expense-account`).
   non-posting/inactive accounts, but because Finance is an allowed source for receivables/payables control accounts, an expense line
   could target AR/AP. Needed from Accounting: an account query (type, posting, control sub-ledger, manual-allowed) in its contracts.
-* GL lines of Finance journals carry base amounts only (functional currency); the transaction-currency amount is in the sub-ledger
+* GL lines of Finance journals carry base amounts only (functional currency); the transaction-currency amount is in the sub-ledger (`JournalLineRequest.BaseAmount` now exists in Accounting.Contracts and could be used to post transaction-currency amounts with fixed base amounts; Finance has not been switched over yet).
   (see *Accounting treatment*). A per-line base override in the posting contract would remove this.
 * Allocations require the open item's currency; cross-currency settlement is not supported.
 * Posted receipts/payments cannot yet be reversed (no un-allocation flow).

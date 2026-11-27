@@ -1,10 +1,13 @@
 # ERP backend (.NET 10)
 
+Module reference: [docs/modules](../docs/modules) · deployment and operations: [docs/operations/runbook.md](../docs/operations/runbook.md).
+
 Modular monolith (ADR-001). Each module has `Domain`, `Application`, `Infrastructure` and `Contracts` projects; modules talk to each other only through `Contracts`, which the architecture tests enforce.
 
 ```
 src/BuildingBlocks/  Erp.SharedKernel · Erp.Application · Erp.Infrastructure · Erp.Web
-src/Modules/         Organization · Identity · Configuration
+src/Modules/         Organization · Identity · Configuration · Catalog · Parties · Tax · Accounting · Finance
+                     Inventory · Procurement · Sales · Pos · Manufacturing · Workflow · FixedAssets · Reporting
 src/Host/            Erp.Api (roles api|worker|all) · Erp.Migrator (migrate | init-tenant)
 tests/               Erp.UnitTests · Erp.ArchitectureTests · Erp.IntegrationTests (real SQL Server)
 ```

@@ -188,3 +188,25 @@ Format per ADR: Decision · Why · Alternatives considered · Trade-offs · Futu
 * **Decision:** Every open question in docs/business/03 is resolved with its recommended default, recorded in [docs/business/05-decisions-log.md](docs/business/05-decisions-log.md).
 * **Why:** The project owner instructed the team to decide and proceed.
 * **Trade-offs:** Items marked ⚖️ there (revenue timing, tax, FX, year-end, costing) must be confirmed by a qualified accountant/tax adviser before production use; they are configurable so the confirmation does not require rework. E-invoicing submission remains out of scope.
+
+## ADR-029 Row locks and guarded inserts instead of UPDLOCK+HOLDLOCK on rows that may not exist — Accepted 2026-11-27
+
+* **Decision:** Upserts of running totals (account balances, stock balances, item valuation), number sequences, audit chain heads, inbox claims and idempotency keys create a missing row with a guarded INSERT (a duplicate-key error from a concurrent creator is caught and ignored, the insert having waited on the unique index), then serialise with an explicit `UPDLOCK, ROWLOCK` on the existing row. Idempotency claims the key with a placeholder row at the start of the request.
+* **Why:** `HOLDLOCK` on an absent key takes key-range locks; two transactions inserting *different* new rows into the same gap deadlocked (observed in parallel integration tests across tenants).
+* **Trade-offs:** Slightly more SQL per upsert; the duplicate-key path costs one failed statement under contention. Per-row serialisation (needed for exact stock checks) is unchanged.
+
+## ADR-030 Child collections inside an aggregate stored as JSON columns where they are never queried on their own — Accepted 2026-11-27
+
+* **Decision:** Contacts/addresses (Parties), document lines of inventory documents, production-order components/operations/transactions, approval conditions/steps/actions, fixed-asset schedules and similar are JSON columns on the aggregate row. Data that other modules or reports query relationally (journal lines, inventory movements, invoice lines, open items) stays in tables.
+* **Why:** One row = one tenant/RLS check, one audit entry and one rowversion for the whole aggregate; fewer tables and joins.
+* **Trade-offs:** JSON content is not covered by row-level security predicates of its own (it lives inside a protected row) and cannot be indexed relationally; reporting reads it through module contracts.
+
+## ADR-031 Reporting composes module data only through Contracts; exports via ClosedXML and an HTML renderer — Accepted 2026-11-27
+
+* **Decision:** The Reporting module owns no business data. Each module publishes report fact queries in its Contracts; Reporting aggregates, pages and renders JSON, CSV, XLSX (ClosedXML, MIT) or printable HTML (`IDocumentRenderer`). PDF is out of scope until a PDF library is chosen (OQ-LIC-1).
+* **Trade-offs:** Aggregation in the application over fact rows; read models can be added per report when volume requires.
+
+## ADR-032 Deployment: one image with process roles, secrets as files, explicit migrations — Accepted 2026-11-27
+
+* **Decision:** The same API image runs as `api`, `worker` or `all`; secrets are read from files (`/run/secrets`, the same mechanism for Docker, Kubernetes and Windows) and generated only at install time; migrations run only as an explicit step (Compose profile, Helm hook disabled by default, `upgrade.sh` with mandatory backup); readiness reports unhealthy while migrations are pending. Production startup refuses weak configuration (missing signing key, insecure cookies, short platform key, implicit CORS).
+* **Why:** Implements Part 20 and ADR-015/025 identically for cloud and on-premises.
