@@ -11,7 +11,7 @@ namespace Erp.ArchitectureTests;
 
 public class ArchitectureTests
 {
-    private static readonly string[] Modules = ["Organization", "Identity", "Configuration"];
+    private static readonly string[] Modules = ["Organization", "Identity", "Configuration", "Catalog"];
 
     private static Assembly Load(string name) => Assembly.Load(name);
 
@@ -66,7 +66,8 @@ public class ArchitectureTests
         typeof(PlatformDbContextFactory),
         typeof(Erp.Modules.Organization.Infrastructure.OrganizationDbContextFactory),
         typeof(Erp.Modules.Identity.Infrastructure.IdentityDbContextFactory),
-        typeof(Erp.Modules.Configuration.Infrastructure.ConfigurationDbContextFactory));
+        typeof(Erp.Modules.Configuration.Infrastructure.ConfigurationDbContextFactory),
+        typeof(Erp.Modules.Catalog.Infrastructure.CatalogDbContextFactory));
 
     /// <summary>Tenant isolation must never depend on a developer remembering a filter (Part 4).</summary>
     [Theory]

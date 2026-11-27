@@ -11,6 +11,12 @@
     <Project Path="src/Host/Erp.Migrator/Erp.Migrator.csproj" />
   </Folder>
   <Folder Name="/src/Modules/" />
+  <Folder Name="/src/Modules/Catalog/">
+    <Project Path="src/Modules/Catalog/Erp.Modules.Catalog.Application/Erp.Modules.Catalog.Application.csproj" />
+    <Project Path="src/Modules/Catalog/Erp.Modules.Catalog.Contracts/Erp.Modules.Catalog.Contracts.csproj" />
+    <Project Path="src/Modules/Catalog/Erp.Modules.Catalog.Domain/Erp.Modules.Catalog.Domain.csproj" />
+    <Project Path="src/Modules/Catalog/Erp.Modules.Catalog.Infrastructure/Erp.Modules.Catalog.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Modules/Configuration/">
     <Project Path="src/Modules/Configuration/Erp.Modules.Configuration.Application/Erp.Modules.Configuration.Application.csproj" />
     <Project Path="src/Modules/Configuration/Erp.Modules.Configuration.Contracts/Erp.Modules.Configuration.Contracts.csproj" />
