@@ -20,6 +20,8 @@
     <ProjectReference Include="../../src/Modules/Accounting/Erp.Modules.Accounting.Application/Erp.Modules.Accounting.Application.csproj" />
       <ProjectReference Include="../../src/Modules/Finance/Erp.Modules.Finance.Domain/Erp.Modules.Finance.Domain.csproj" />
     <ProjectReference Include="../../src/Modules/Finance/Erp.Modules.Finance.Application/Erp.Modules.Finance.Application.csproj" />
+    <ProjectReference Include="../../src/Modules/Sales/Erp.Modules.Sales.Domain/Erp.Modules.Sales.Domain.csproj" />
+    <ProjectReference Include="../../src/Modules/Sales/Erp.Modules.Sales.Application/Erp.Modules.Sales.Application.csproj" />
     <ProjectReference Include="../../src/Modules/Inventory/Erp.Modules.Inventory.Domain/Erp.Modules.Inventory.Domain.csproj" />
   </ItemGroup>
   <ItemGroup>

@@ -59,6 +59,12 @@
     <Project Path="src/Modules/Parties/Erp.Modules.Parties.Domain/Erp.Modules.Parties.Domain.csproj" />
     <Project Path="src/Modules/Parties/Erp.Modules.Parties.Infrastructure/Erp.Modules.Parties.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/Sales/">
+    <Project Path="src/Modules/Sales/Erp.Modules.Sales.Application/Erp.Modules.Sales.Application.csproj" />
+    <Project Path="src/Modules/Sales/Erp.Modules.Sales.Contracts/Erp.Modules.Sales.Contracts.csproj" />
+    <Project Path="src/Modules/Sales/Erp.Modules.Sales.Domain/Erp.Modules.Sales.Domain.csproj" />
+    <Project Path="src/Modules/Sales/Erp.Modules.Sales.Infrastructure/Erp.Modules.Sales.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Modules/Tax/">
     <Project Path="src/Modules/Tax/Erp.Modules.Tax.Application/Erp.Modules.Tax.Application.csproj" />
     <Project Path="src/Modules/Tax/Erp.Modules.Tax.Contracts/Erp.Modules.Tax.Contracts.csproj" />
