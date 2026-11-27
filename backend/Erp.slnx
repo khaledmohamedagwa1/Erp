@@ -65,6 +65,9 @@
     <Project Path="src/Modules/Tax/Erp.Modules.Tax.Domain/Erp.Modules.Tax.Domain.csproj" />
     <Project Path="src/Modules/Tax/Erp.Modules.Tax.Infrastructure/Erp.Modules.Tax.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/Workflow/">
+    <Project Path="src/Modules/Workflow/Erp.Modules.Workflow.Contracts/Erp.Modules.Workflow.Contracts.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Erp.ArchitectureTests/Erp.ArchitectureTests.csproj" />
     <Project Path="tests/Erp.IntegrationTests/Erp.IntegrationTests.csproj" />
