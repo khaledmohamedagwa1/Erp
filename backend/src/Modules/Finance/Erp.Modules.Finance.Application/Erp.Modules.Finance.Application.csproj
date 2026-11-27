@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../Erp.Modules.Finance.Domain/Erp.Modules.Finance.Domain.csproj" />
+    <ProjectReference Include="../Erp.Modules.Finance.Contracts/Erp.Modules.Finance.Contracts.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Erp.Application/Erp.Application.csproj" />
+    <ProjectReference Include="../../Accounting/Erp.Modules.Accounting.Contracts/Erp.Modules.Accounting.Contracts.csproj" />
+    <ProjectReference Include="../../Parties/Erp.Modules.Parties.Contracts/Erp.Modules.Parties.Contracts.csproj" />
+    <ProjectReference Include="../../Tax/Erp.Modules.Tax.Contracts/Erp.Modules.Tax.Contracts.csproj" />
+    <ProjectReference Include="../../Organization/Erp.Modules.Organization.Contracts/Erp.Modules.Organization.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+  </ItemGroup>
+</Project>
