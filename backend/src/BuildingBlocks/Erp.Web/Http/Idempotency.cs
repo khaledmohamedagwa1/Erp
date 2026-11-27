@@ -58,7 +58,7 @@ public static class IdempotencyExtensions
             await session.BeginTransactionAsync(ct);
             try
             {
-                var existing = await store.FindAsync(key, endpoint, ct);
+                var existing = await store.ClaimAsync(key, endpoint, hash, ct);
                 if (existing is not null)
                 {
                     await session.RollbackAsync(ct);

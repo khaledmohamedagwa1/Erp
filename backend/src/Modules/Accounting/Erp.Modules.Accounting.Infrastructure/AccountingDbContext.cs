@@ -220,16 +220,31 @@ public sealed class AccountBalanceWriter(AccountingDbContext db, ITenantContext 
 
         foreach (var g in groups)
         {
+            // Row locks only (no HOLDLOCK range locks): an existing row is updated under an exclusive lock held to commit;
+            // a missing row is inserted, and if a concurrent posting inserted it first the unique index makes us wait,
+            // then fail with a duplicate key, and we update instead. This avoids key-range deadlocks between postings.
             await db.Database.ExecuteSqlInterpolatedAsync($"""
-                UPDATE accounting.AccountBalance WITH (UPDLOCK, HOLDLOCK)
+                UPDATE accounting.AccountBalance WITH (UPDLOCK, ROWLOCK)
                    SET BaseDebit = BaseDebit + {g.BaseDebit}, BaseCredit = BaseCredit + {g.BaseCredit},
                        TxDebit = TxDebit + {g.TxDebit}, TxCredit = TxCredit + {g.TxCredit}
                  WHERE TenantId = {tenantId} AND LegalEntityId = {journal.LegalEntityId} AND AccountId = {g.AccountId}
                    AND FiscalPeriodId = {periodId} AND CostCenterId = {g.CostCenterId} AND Currency = {journal.Currency};
                 IF @@ROWCOUNT = 0
-                    INSERT INTO accounting.AccountBalance (Id, TenantId, CompanyId, LegalEntityId, AccountId, FiscalPeriodId, CostCenterId, Currency, BaseDebit, BaseCredit, TxDebit, TxCredit)
-                    VALUES (NEWID(), {tenantId}, {journal.CompanyId}, {journal.LegalEntityId}, {g.AccountId}, {periodId}, {g.CostCenterId}, {journal.Currency},
-                            {g.BaseDebit}, {g.BaseCredit}, {g.TxDebit}, {g.TxCredit});
+                BEGIN
+                    BEGIN TRY
+                        INSERT INTO accounting.AccountBalance (Id, TenantId, CompanyId, LegalEntityId, AccountId, FiscalPeriodId, CostCenterId, Currency, BaseDebit, BaseCredit, TxDebit, TxCredit)
+                        VALUES (NEWID(), {tenantId}, {journal.CompanyId}, {journal.LegalEntityId}, {g.AccountId}, {periodId}, {g.CostCenterId}, {journal.Currency},
+                                {g.BaseDebit}, {g.BaseCredit}, {g.TxDebit}, {g.TxCredit});
+                    END TRY
+                    BEGIN CATCH
+                        IF ERROR_NUMBER() NOT IN (2601, 2627) THROW;
+                        UPDATE accounting.AccountBalance WITH (UPDLOCK, ROWLOCK)
+                           SET BaseDebit = BaseDebit + {g.BaseDebit}, BaseCredit = BaseCredit + {g.BaseCredit},
+                               TxDebit = TxDebit + {g.TxDebit}, TxCredit = TxCredit + {g.TxCredit}
+                         WHERE TenantId = {tenantId} AND LegalEntityId = {journal.LegalEntityId} AND AccountId = {g.AccountId}
+                           AND FiscalPeriodId = {periodId} AND CostCenterId = {g.CostCenterId} AND Currency = {journal.Currency};
+                    END CATCH
+                END
                 """, cancellationToken);
         }
     }

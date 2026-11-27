@@ -36,7 +36,15 @@ public sealed class AuditWriter(ErpDbSession session, ITenantContext tenantConte
         long sequence;
         string previousHash;
         await using (var head = Command(connection, transaction, """
-            SELECT LastSequence, LastHash FROM audit.AuditChainHead WITH (UPDLOCK, HOLDLOCK) WHERE TenantId = @tenantId;
+            -- Create the tenant's chain head once (row locks only, no key-range locks), then lock that row.
+            IF NOT EXISTS (SELECT 1 FROM audit.AuditChainHead WHERE TenantId = @tenantId)
+            BEGIN TRY
+                INSERT INTO audit.AuditChainHead (TenantId, LastSequence, LastHash) VALUES (@tenantId, 0, REPLICATE('0', 64));
+            END TRY
+            BEGIN CATCH
+                IF ERROR_NUMBER() NOT IN (2601, 2627) THROW;
+            END CATCH
+            SELECT LastSequence, LastHash FROM audit.AuditChainHead WITH (UPDLOCK, ROWLOCK) WHERE TenantId = @tenantId;
             """))
         {
             Add(head, "@tenantId", DbType.Guid, tenantId);
@@ -84,7 +92,6 @@ public sealed class AuditWriter(ErpDbSession session, ITenantContext tenantConte
 
         await using var upsert = Command(connection, transaction, """
             UPDATE audit.AuditChainHead SET LastSequence = @sequence, LastHash = @hash WHERE TenantId = @tenantId;
-            IF @@ROWCOUNT = 0 INSERT INTO audit.AuditChainHead (TenantId, LastSequence, LastHash) VALUES (@tenantId, @sequence, @hash);
             """);
         Add(upsert, "@tenantId", DbType.Guid, tenantId);
         Add(upsert, "@sequence", DbType.Int64, sequence);

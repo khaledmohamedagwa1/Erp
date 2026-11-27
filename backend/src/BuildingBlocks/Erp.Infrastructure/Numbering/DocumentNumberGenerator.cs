@@ -23,9 +23,16 @@ public sealed class DocumentNumberGenerator(ErpDbSession session, ITenantContext
             scope.DocumentType, scope.FiscalYear?.ToString(CultureInfo.InvariantCulture) ?? "-");
 
         await using var command = AuditWriter.Command(transaction.Connection!, transaction, """
-            IF NOT EXISTS (SELECT 1 FROM core.NumberSequence WITH (UPDLOCK, HOLDLOCK) WHERE TenantId = @tenantId AND ScopeKey = @scopeKey)
+            -- Row locks only: create the sequence row once (a concurrent creator makes us wait, then we ignore the duplicate),
+            -- then increment under an exclusive row lock held until the transaction ends (gapless).
+            IF NOT EXISTS (SELECT 1 FROM core.NumberSequence WHERE TenantId = @tenantId AND ScopeKey = @scopeKey)
+            BEGIN TRY
                 INSERT INTO core.NumberSequence (Id, TenantId, ScopeKey, Prefix, Padding, NextValue) VALUES (NEWID(), @tenantId, @scopeKey, @prefix, 6, 1);
-            UPDATE core.NumberSequence WITH (UPDLOCK, HOLDLOCK)
+            END TRY
+            BEGIN CATCH
+                IF ERROR_NUMBER() NOT IN (2601, 2627) THROW;
+            END CATCH
+            UPDATE core.NumberSequence WITH (UPDLOCK, ROWLOCK)
                SET NextValue = NextValue + 1
             OUTPUT deleted.NextValue, deleted.Prefix, deleted.Padding
              WHERE TenantId = @tenantId AND ScopeKey = @scopeKey;

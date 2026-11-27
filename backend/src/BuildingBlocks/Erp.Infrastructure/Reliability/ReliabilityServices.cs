@@ -41,14 +41,16 @@ public sealed class SqlInbox(ErpDbSession session) : IInbox
         var transaction = session.Transaction
             ?? throw new InvalidOperationException("The inbox must be used inside a transaction so the claim commits with the work.");
 
+        // Claim by inserting: the primary key serializes concurrent deliveries of the same message without key-range locks.
         await using var command = AuditWriter.Command(transaction.Connection!, transaction, """
-            IF EXISTS (SELECT 1 FROM core.InboxMessage WITH (UPDLOCK, HOLDLOCK) WHERE MessageId = @id AND Consumer = @consumer)
-                SELECT 0;
-            ELSE
-            BEGIN
+            BEGIN TRY
                 INSERT INTO core.InboxMessage (MessageId, Consumer, ProcessedAtUtc) VALUES (@id, @consumer, SYSUTCDATETIME());
                 SELECT 1;
-            END
+            END TRY
+            BEGIN CATCH
+                IF ERROR_NUMBER() NOT IN (2601, 2627) THROW;
+                SELECT 0;
+            END CATCH
             """);
         AuditWriter.Add(command, "@id", DbType.Guid, messageId);
         AuditWriter.Add(command, "@consumer", DbType.String, consumer);
@@ -67,9 +69,14 @@ public sealed record StoredResponse(string RequestHash, int StatusCode, string? 
 
 public interface IIdempotencyStore
 {
-    /// <summary>Reads (and locks until the transaction ends) the record for this key, ignoring expired records.</summary>
-    Task<StoredResponse?> FindAsync(string key, string endpoint, CancellationToken cancellationToken);
+    /// <summary>
+    /// Claims the key for this request by inserting a placeholder in the current transaction. Returns null when claimed
+    /// (process the request), or the stored response of an earlier request with the same key. A concurrent duplicate
+    /// waits on the key until the first request commits (then it gets the stored response) or rolls back (then it claims).
+    /// </summary>
+    Task<StoredResponse?> ClaimAsync(string key, string endpoint, string requestHash, CancellationToken cancellationToken);
 
+    /// <summary>Stores the final response on the claimed record.</summary>
     Task SaveAsync(string key, string endpoint, StoredResponse response, CancellationToken cancellationToken);
 }
 
@@ -78,21 +85,43 @@ public sealed class SqlIdempotencyStore(ErpDbSession session, ITenantContext ten
 {
     public static readonly TimeSpan Retention = TimeSpan.FromHours(24);
 
-    public async Task<StoredResponse?> FindAsync(string key, string endpoint, CancellationToken cancellationToken)
+    public async Task<StoredResponse?> ClaimAsync(string key, string endpoint, string requestHash, CancellationToken cancellationToken)
     {
         var transaction = RequireTransaction();
-        await using var command = AuditWriter.Command(transaction.Connection!, transaction, """
+        var now = clock.UtcNow;
+        await using (var claim = AuditWriter.Command(transaction.Connection!, transaction, """
             DELETE FROM core.IdempotencyRecord WHERE TenantId = @tenantId AND [Key] = @key AND Endpoint = @endpoint AND ExpiresAtUtc <= @now;
+            BEGIN TRY
+                INSERT INTO core.IdempotencyRecord (Id, TenantId, [Key], Endpoint, RequestHash, StatusCode, ResponseBody, ContentType, CreatedAtUtc, ExpiresAtUtc)
+                VALUES (NEWID(), @tenantId, @key, @endpoint, @hash, 0, NULL, NULL, @now, @expires);
+                SELECT 1;
+            END TRY
+            BEGIN CATCH
+                IF ERROR_NUMBER() NOT IN (2601, 2627) THROW;
+                SELECT 0;
+            END CATCH
+            """))
+        {
+            AddKey(claim, key, endpoint);
+            AuditWriter.Add(claim, "@hash", DbType.String, requestHash);
+            AuditWriter.Add(claim, "@now", DbType.DateTime2, now);
+            AuditWriter.Add(claim, "@expires", DbType.DateTime2, now.Add(Retention));
+            if (Convert.ToInt32(await claim.ExecuteScalarAsync(cancellationToken), System.Globalization.CultureInfo.InvariantCulture) == 1)
+            {
+                return null;
+            }
+        }
+
+        await using var read = AuditWriter.Command(transaction.Connection!, transaction, """
             SELECT RequestHash, StatusCode, ResponseBody, ContentType
-            FROM core.IdempotencyRecord WITH (UPDLOCK, HOLDLOCK)
+            FROM core.IdempotencyRecord
             WHERE TenantId = @tenantId AND [Key] = @key AND Endpoint = @endpoint;
             """);
-        AddKey(command, key, endpoint);
-        AuditWriter.Add(command, "@now", DbType.DateTime2, clock.UtcNow);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        AddKey(read, key, endpoint);
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
-            return null;
+            throw new InvalidOperationException("Idempotency record disappeared after a duplicate-key conflict.");
         }
 
         return new StoredResponse(reader.GetString(0), reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetString(2), reader.IsDBNull(3) ? null : reader.GetString(3));
@@ -102,18 +131,19 @@ public sealed class SqlIdempotencyStore(ErpDbSession session, ITenantContext ten
     {
         var transaction = RequireTransaction();
         await using var command = AuditWriter.Command(transaction.Connection!, transaction, """
-            INSERT INTO core.IdempotencyRecord (Id, TenantId, [Key], Endpoint, RequestHash, StatusCode, ResponseBody, ContentType, CreatedAtUtc, ExpiresAtUtc)
-            VALUES (NEWID(), @tenantId, @key, @endpoint, @hash, @status, @body, @contentType, @now, @expires);
+            UPDATE core.IdempotencyRecord
+               SET RequestHash = @hash, StatusCode = @status, ResponseBody = @body, ContentType = @contentType
+             WHERE TenantId = @tenantId AND [Key] = @key AND Endpoint = @endpoint;
             """);
         AddKey(command, key, endpoint);
-        var now = clock.UtcNow;
         AuditWriter.Add(command, "@hash", DbType.String, response.RequestHash);
         AuditWriter.Add(command, "@status", DbType.Int32, response.StatusCode);
         AuditWriter.Add(command, "@body", DbType.String, response.Body);
         AuditWriter.Add(command, "@contentType", DbType.String, response.ContentType);
-        AuditWriter.Add(command, "@now", DbType.DateTime2, now);
-        AuditWriter.Add(command, "@expires", DbType.DateTime2, now.Add(Retention));
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            throw new InvalidOperationException("The idempotency key was not claimed in this transaction.");
+        }
     }
 
     private System.Data.Common.DbTransaction RequireTransaction() =>
