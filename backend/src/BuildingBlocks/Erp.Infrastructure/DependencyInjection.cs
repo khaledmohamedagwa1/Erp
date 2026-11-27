@@ -36,6 +36,7 @@ public static class DependencyInjection
         services.AddScoped<AuditChainVerifier>();
         services.AddScoped<ErpDbContextDependencies>();
         services.AddScoped<IDocumentNumberGenerator, DocumentNumberGenerator>();
+        services.AddSingleton<Erp.Application.Reporting.IDocumentRenderer, Erp.Infrastructure.Rendering.HtmlDocumentRenderer>();
         services.AddScoped<IChangeTrackerReset>(sp => sp.GetRequiredService<ErpDbSession>());
         services.AddScoped<IInbox, SqlInbox>();
         services.AddScoped<IIdempotencyStore, SqlIdempotencyStore>();

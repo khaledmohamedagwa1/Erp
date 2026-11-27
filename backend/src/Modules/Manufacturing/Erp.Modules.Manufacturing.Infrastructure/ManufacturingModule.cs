@@ -69,6 +69,7 @@ public sealed class ManufacturingModule : IErpModule
         services.AddScoped<ManufacturingSupport>();
         services.AddScoped<ProductionPoster>();
         services.AddScoped<IManufacturingQueries, ManufacturingQueries>();
+        services.AddScoped<IManufacturingReportQueries, ManufacturingReportQueries>();
 
         // MRP inputs: Manufacturing's own production orders, open purchase orders from Procurement, and confirmed
         // sales-order demand from Sales. IEnumerable resolves every registration.

@@ -66,6 +66,7 @@ public sealed class SalesModule : IErpModule
         services.AddScoped<SalesPricing>();
         services.AddScoped<SalesQueries>();
         services.AddScoped<ISalesQueries>(sp => sp.GetRequiredService<SalesQueries>());
+        services.AddScoped<ISalesReportQueries, SalesReportQueries>();
         services.AddScoped<SalesCreditService>();
         services.AddScoped<SalesSubmission>();
         services.AddScoped<OrderConfirmation>();
