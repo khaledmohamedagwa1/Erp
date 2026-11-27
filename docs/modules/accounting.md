@@ -113,19 +113,22 @@ await postingService.PostAsync(new JournalRequest(legalEntityId, invoiceDate, So
 All statements are computed **only from posted journal lines** (status Posted or Reversed — a reversal is itself a posted
 journal, so the pair nets to zero), in the legal entity's functional currency.
 
-* **Income statement.** Revenue accounts that posting rules map to `SalesRevenue`, `SalesReturns`, `SalesDiscount` or
-  `ServiceRevenue` form *revenue*; expense accounts mapped to `CostOfGoodsSold`, `PurchasePriceVariance`, `CostTrueUp`,
-  `ProductionVariance` or `AbnormalScrap` form *cost of sales*. Other revenue accounts are *other income*, other expense accounts
-  *operating expenses*. Gross profit = revenue − cost of sales; net profit = gross profit + other income − operating expenses.
-  Year-end closing journals are excluded. The cost-centre filter applies to the income statement only (balance sheets are not
-  kept per cost centre).
+* **Income statement.** Each revenue/expense account carries a stored **income-statement group** (`ReportGroup`: Revenue, CostOfSales,
+  OtherIncome, OperatingExpenses), editable with `PUT /accounts/{id}/report-group {group}` (`accounting.report-group-invalid` when it
+  does not fit the account type). The generic chart derives it once at seeding from the role mapping (net-revenue roles `SalesRevenue`,
+  `SalesReturns`, `SalesDiscount`, `ServiceRevenue`; cost-of-sales roles `CostOfGoodsSold`, `PurchasePriceVariance`, `CostTrueUp`,
+  `ProductionVariance`, `AbnormalScrap`); new accounts default to Revenue / OperatingExpenses; the migration back-filled existing accounts
+  the same way. Statements therefore no longer change when posting rules change. Gross profit = revenue − cost of sales; net profit =
+  gross profit + other income − operating expenses. Year-end closing journals are excluded. The cost-centre filter applies to the income
+  statement only (balance sheets are not kept per cost centre).
 * **Balance sheet** "as of" a date uses cumulative balances since inception, so balance-sheet accounts carry forward across
   fiscal years without any opening entry. Revenue/expense balances not yet closed appear in equity as
   *Current and unclosed earnings*; after the year-end close they are in retained earnings instead. Assets = liabilities + equity
   always holds because every posted journal balances.
 * **Cash flow (indirect).** Net profit, then each balance-sheet account's movement with the sign flipped (a rise in a non-cash
-  asset uses cash; a rise in a liability or equity provides it), grouped by the account's **cash-flow category**: Operating (and
-  unclassified `None` accounts, so the statement always ties), Investing, Financing. `Cash` accounts are the ones explained.
+  asset uses cash; a rise in a liability or equity provides it), grouped by the account's **cash-flow category** (editable with
+  `PUT /accounts/{id}/cash-flow-category`): Operating, Investing, Financing. Unclassified (`None`) balance-sheet accounts are listed in a
+  separate `unclassified` section and counted with operating activities, so the statement still ties while showing what needs a category. `Cash` accounts are the ones explained.
   Year-end closing journals are excluded (they are non-cash and net to zero). The generic chart sets: 1110/1120 Cash, 1510
   Investing, 3100/3200/3300 Financing, every other balance-sheet posting account Operating — accumulated depreciation is operating
   on purpose: its increase is the depreciation add-back.
@@ -175,7 +178,8 @@ EF Core is told about the triggers (`HasTrigger`) so it does not use OUTPUT clau
 `Account`, `CostCenter`, `FiscalYear` → `FiscalPeriod`, `JournalEntry` → `JournalLine`, `AccountDetermination` (posting rules),
 `AccountBalance` (running totals per legal entity/account/period/cost centre/currency, upserted with `UPDLOCK, HOLDLOCK` in the posting
 transaction, locks taken in account order), `OpeningBalance` → `OpeningBalanceLine`. `FiscalYear` carries `IsClosed`,
-`ClosingJournalId`, `ClosedAtUtc`; `Account` carries `CashFlowCategory`. All tables carry `TenantId` and are covered by row-level security.
+`ClosingJournalId`, `ClosedAtUtc`; `Account` carries `CashFlowCategory` and `ReportGroup`. `JournalLine` stores the posting role it was
+resolved from, the tax code of tax lines and the taxable base (for the VAT return). All tables carry `TenantId` and are covered by row-level security.
 The posting rule set is the company's collection of `AccountDetermination` rows (no separate rule-set aggregate).
 
 Contract additions (additive only): `AccountingPermissions.OpeningBalanceManage`, `AccountingPermissions.YearEndClose`,
@@ -183,6 +187,13 @@ Contract additions (additive only): `AccountingPermissions.OpeningBalanceManage`
 
 ## Not yet implemented
 
-Month-end unrealized FX revaluation of open foreign-currency items (OQ-ACC-5 — belongs with the Finance open items),
-multi-currency balance reporting, statements consolidated across legal entities, and a recost of statements when posting rules
-change (statements classify accounts by the *current* posting rules).
+Multi-currency balance reporting and statements consolidated across legal entities.
+
+## Contract additions (wave 5)
+
+* `JournalLineRequest.BaseOnly` (functional-currency-only line, e.g. a realized exchange difference in a foreign-currency journal) and
+  `JournalLineRequest.TaxableAmount` (taxable amount behind a tax line) — optional, existing callers unchanged.
+* `JournalPosted` moved to Accounting.Contracts as an integration event (outbox) with `CompanyId` and `JournalDate`; Tax subscribes to it
+  for e-invoicing.
+* `IAccountLedgerQueries`: posted lines of an account (bank reconciliation in Finance), role → account resolution, tax lines with tax
+  code and taxable base, and the movement on tax accounts (VAT return).

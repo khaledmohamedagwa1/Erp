@@ -102,6 +102,13 @@ namespace Erp.Modules.Finance.Infrastructure.Migrations
                         .HasPrecision(19, 4)
                         .HasColumnType("decimal(19,4)");
 
+                    b.Property<Guid?>("ReversalOfId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("SettlementAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
                     b.Property<decimal>("SettlementBase")
                         .HasPrecision(19, 4)
                         .HasColumnType("decimal(19,4)");
@@ -326,6 +333,11 @@ namespace Erp.Modules.Finance.Infrastructure.Migrations
                     b.HasIndex("TenantId");
 
                     b.HasIndex("TenantId", "CashBankAccountId", "Date");
+
+                    b.HasIndex("TenantId", "CashBankAccountId", "SourceDocType", "SourceDocId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_CashMovement_GlJournalLine")
+                        .HasFilter("[SourceDocType] = 'GlJournalLine'");
 
                     b.ToTable("CashMovement", "finance");
                 });
@@ -760,6 +772,13 @@ namespace Erp.Modules.Finance.Infrastructure.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
+                    b.Property<DateOnly?>("ReversalDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("ReversalReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
                         .ValueGeneratedOnAddOrUpdate()
@@ -785,6 +804,9 @@ namespace Erp.Modules.Finance.Infrastructure.Migrations
                         .HasPrecision(19, 4)
                         .HasColumnType("decimal(19,4)");
 
+                    b.Property<Guid?>("WithholdingCertificateId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid?>("WithholdingTaxGroupId")
                         .HasColumnType("uniqueidentifier");
 
@@ -794,9 +816,96 @@ namespace Erp.Modules.Finance.Infrastructure.Migrations
 
                     b.HasIndex("TenantId");
 
+                    b.HasIndex("TenantId", "WithholdingCertificateId");
+
                     b.HasIndex("TenantId", "CompanyId", "Direction", "PartyId");
 
                     b.ToTable("Settlement", "finance");
+                });
+
+            modelBuilder.Entity("Erp.Modules.Finance.Domain.WithholdingCertificate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasPrecision(3)
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ExternalReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateOnly>("IssueDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<Guid>("LegalEntityId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedAtUtc")
+                        .HasPrecision(3)
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<Guid?>("ModifiedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("Number")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<Guid>("PartyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateOnly>("PeriodFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly>("PeriodTo")
+                        .HasColumnType("date");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("TotalTaxableBase")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("TotalWithheldBase")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "CompanyId", "Kind", "PartyId");
+
+                    b.ToTable("WithholdingCertificate", "finance");
                 });
 
             modelBuilder.Entity("Erp.Modules.Finance.Domain.Allocation", b =>
@@ -984,6 +1093,9 @@ namespace Erp.Modules.Finance.Infrastructure.Migrations
 
                             b1.Property<Guid>("OpenItemId");
 
+                            b1.Property<decimal?>("SettlementAmount")
+                                .HasPrecision(19, 4);
+
                             b1.HasKey("SettlementId", "__synthesizedOrdinal");
 
                             b1.ToTable("Settlement", "finance");
@@ -997,6 +1109,59 @@ namespace Erp.Modules.Finance.Infrastructure.Migrations
                         });
 
                     b.Navigation("Allocations");
+                });
+
+            modelBuilder.Entity("Erp.Modules.Finance.Domain.WithholdingCertificate", b =>
+                {
+                    b.OwnsMany("Erp.Modules.Finance.Domain.WithholdingCertificateLine", "Lines", b1 =>
+                        {
+                            b1.Property<Guid>("WithholdingCertificateId");
+
+                            b1.Property<int>("__synthesizedOrdinal")
+                                .ValueGeneratedOnAddOrUpdate();
+
+                            b1.Property<string>("Currency")
+                                .IsRequired()
+                                .HasMaxLength(3);
+
+                            b1.Property<DateOnly>("Date");
+
+                            b1.Property<decimal>("ExchangeRate")
+                                .HasPrecision(18, 8);
+
+                            b1.Property<Guid>("SettlementId");
+
+                            b1.Property<string>("SettlementNumber")
+                                .IsRequired()
+                                .HasMaxLength(50);
+
+                            b1.Property<Guid?>("TaxGroupId");
+
+                            b1.Property<decimal>("TaxableAmount")
+                                .HasPrecision(19, 4);
+
+                            b1.Property<decimal>("TaxableBase")
+                                .HasPrecision(19, 4);
+
+                            b1.Property<decimal>("WithheldAmount")
+                                .HasPrecision(19, 4);
+
+                            b1.Property<decimal>("WithheldBase")
+                                .HasPrecision(19, 4);
+
+                            b1.HasKey("WithholdingCertificateId", "__synthesizedOrdinal");
+
+                            b1.ToTable("WithholdingCertificate", "finance");
+
+                            b1
+                                .ToJson("Lines")
+                                .HasColumnType("nvarchar(max)");
+
+                            b1.WithOwner()
+                                .HasForeignKey("WithholdingCertificateId");
+                        });
+
+                    b.Navigation("Lines");
                 });
 #pragma warning restore 612, 618
         }

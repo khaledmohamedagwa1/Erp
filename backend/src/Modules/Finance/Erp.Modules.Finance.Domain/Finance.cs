@@ -13,6 +13,13 @@ public static class FinanceErrors
     public static readonly Error CurrencyMismatch = Error.Validation("finance.currency-mismatch", "Allocations must be in the same currency as the open item.");
     public static readonly Error NotDraft = Error.Conflict("finance.not-draft", "Only draft documents can be changed or posted.");
     public static readonly Error InvalidAmount = Error.Validation("finance.invalid-amount", "Amounts must be positive.");
+    public static readonly Error NotPosted = Error.Conflict("finance.not-posted", "Only posted documents can be reversed.");
+    public static readonly Error ReasonRequired = Error.Validation("finance.reversal-reason-required", "A reason is required to reverse a document.");
+    public static readonly Error Reconciled = Error.Conflict("finance.movement-reconciled",
+        "The cash movement is part of a completed bank reconciliation. Reopen the reconciliation before reversing.");
+    public static readonly Error InReconciliation = Error.Conflict("finance.movement-in-reconciliation",
+        "The cash movement is matched in a draft bank reconciliation. Unmatch it before reversing.");
+    public static readonly Error ReversalBeforeDocument = Error.Validation("finance.reversal-before-document", "The reversal date cannot be before the document date.");
 }
 
 /// <summary>Pure money arithmetic shared by documents, revaluation and reports. Base = functional currency, 2 decimals.</summary>
@@ -189,6 +196,24 @@ public sealed class OpenItem : AggregateRoot, ICompanyScoped
         return relieved;
     }
 
+    /// <summary>Restores an amount previously settled (reversal of a receipt/payment or allocation) at the base value it relieved.</summary>
+    public void Unsettle(decimal amount, decimal baseRelieved)
+    {
+        if (Status == OpenItemStatus.Cancelled)
+        {
+            throw new DomainException(FinanceErrors.OpenItemClosed);
+        }
+
+        if (amount <= 0 || OpenAmount + amount > OriginalAmount)
+        {
+            throw new DomainException(FinanceErrors.InvalidAmount);
+        }
+
+        OpenAmount += amount;
+        OpenBase += baseRelieved;
+        Status = OpenAmount == OriginalAmount ? OpenItemStatus.Open : OpenItemStatus.PartiallySettled;
+    }
+
     public void Cancel()
     {
         if (OpenAmount != OriginalAmount)
@@ -250,9 +275,20 @@ public sealed class Allocation : ICompanyScoped
 
     public decimal RealizedFxBase { get; private set; }
 
+    /// <summary>Amount consumed from the settlement in the settlement's currency; set only for cross-currency allocations.</summary>
+    public decimal? SettlementAmount { get; private set; }
+
+    /// <summary>The allocation this row reverses (reversal rows carry negated amounts so history and as-of reports stay correct).</summary>
+    public Guid? ReversalOfId { get; private set; }
+
+    public bool IsReversal => ReversalOfId is not null;
+
+    public decimal AppliedSettlementAmount => SettlementAmount ?? Amount;
+
     public static Allocation Create(OpenItem item, SettlementKind kind, Guid settlementId, string reference, DateOnly date,
-        decimal amount, decimal baseRelieved, decimal settlementBase) => new()
+        decimal amount, decimal baseRelieved, decimal settlementBase, decimal? settlementAmount = null) => new()
         {
+            SettlementAmount = settlementAmount,
             Id = SequentialGuid.New(),
             CompanyId = item.CompanyId,
             LegalEntityId = item.LegalEntityId,
@@ -268,6 +304,27 @@ public sealed class Allocation : ICompanyScoped
             SettlementBase = settlementBase,
             RealizedFxBase = FinanceMath.RealizedFx(item.PartyType, baseRelieved, settlementBase),
         };
+
+    /// <summary>A reversing row: same keys, negated amounts, dated <paramref name="date"/>.</summary>
+    public Allocation CreateReversal(DateOnly date, string reference) => new()
+    {
+        Id = SequentialGuid.New(),
+        CompanyId = CompanyId,
+        LegalEntityId = LegalEntityId,
+        OpenItemId = OpenItemId,
+        PartyType = PartyType,
+        PartyId = PartyId,
+        SettlementKind = SettlementKind,
+        SettlementId = SettlementId,
+        SettlementReference = reference.Length > 50 ? reference[..50] : reference,
+        Date = date,
+        Amount = -Amount,
+        BaseRelieved = -BaseRelieved,
+        SettlementBase = -SettlementBase,
+        RealizedFxBase = -RealizedFxBase,
+        SettlementAmount = SettlementAmount is null ? null : -SettlementAmount,
+        ReversalOfId = Id,
+    };
 }
 
 public enum CashBankKind
@@ -332,6 +389,7 @@ public enum DocumentStatus
 {
     Draft = 1,
     Posted = 2,
+    Reversed = 3,
 }
 
 public enum PaymentMethod
@@ -348,15 +406,22 @@ public sealed class RequestedAllocation
     {
     }
 
-    public RequestedAllocation(Guid openItemId, decimal amount)
+    public RequestedAllocation(Guid openItemId, decimal amount, decimal? settlementAmount = null)
     {
         OpenItemId = openItemId;
         Amount = amount;
+        SettlementAmount = settlementAmount;
     }
 
     public Guid OpenItemId { get; private set; }
 
+    /// <summary>Amount settled on the open item, in the open item's currency.</summary>
     public decimal Amount { get; private set; }
+
+    /// <summary>Amount taken from the settlement in its own currency; set only for cross-currency allocations.</summary>
+    public decimal? SettlementAmount { get; private set; }
+
+    public decimal AppliedAmount => SettlementAmount ?? Amount;
 }
 
 public enum SettlementDirection
@@ -419,6 +484,13 @@ public sealed class Settlement : AggregateRoot, ICompanyScoped
 
     public Guid? JournalId { get; private set; }
 
+    public DateOnly? ReversalDate { get; private set; }
+
+    public string? ReversalReason { get; private set; }
+
+    /// <summary>The active withholding certificate listing this document's withheld tax, if any.</summary>
+    public Guid? WithholdingCertificateId { get; private set; }
+
     public IReadOnlyCollection<RequestedAllocation> Allocations => _allocations.AsReadOnly();
 
     public PartyKind PartyType => Direction == SettlementDirection.Receipt ? PartyKind.Customer : PartyKind.Supplier;
@@ -469,13 +541,14 @@ public sealed class Settlement : AggregateRoot, ICompanyScoped
             throw new DomainException(FinanceErrors.InvalidAmount);
         }
 
-        if (list.Sum(a => a.Amount) > SettlementValue)
+        if (list.Sum(a => a.AppliedAmount) > SettlementValue)
         {
             throw new DomainException(FinanceErrors.OverAllocation);
         }
 
         _allocations.Clear();
-        _allocations.AddRange(list.GroupBy(a => a.OpenItemId).Select(g => new RequestedAllocation(g.Key, g.Sum(a => a.Amount))));
+        _allocations.AddRange(list.GroupBy(a => a.OpenItemId).Select(g => new RequestedAllocation(g.Key, g.Sum(a => a.Amount),
+            g.Any(a => a.SettlementAmount is not null) ? g.Sum(a => a.AppliedAmount) : null)));
     }
 
     public void MarkPosted(string number, Guid journalId, decimal unallocated)
@@ -496,6 +569,33 @@ public sealed class Settlement : AggregateRoot, ICompanyScoped
         }
 
         UnallocatedAmount -= amount;
+    }
+
+    public void LinkWithholdingCertificate(Guid? certificateId) => WithholdingCertificateId = certificateId;
+
+    /// <summary>Marks the posted document reversed (its journal reversed and every allocation undone by the caller).</summary>
+    public void MarkReversed(DateOnly reversalDate, string reason)
+    {
+        if (Status != DocumentStatus.Posted)
+        {
+            throw new DomainException(FinanceErrors.NotPosted);
+        }
+
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new DomainException(FinanceErrors.ReasonRequired);
+        }
+
+        if (reversalDate < Date)
+        {
+            throw new DomainException(FinanceErrors.ReversalBeforeDocument);
+        }
+
+        var trimmed = reason.Trim();
+        ReversalDate = reversalDate;
+        ReversalReason = trimmed.Length > 500 ? trimmed[..500] : trimmed;
+        UnallocatedAmount = 0;
+        Status = DocumentStatus.Reversed;
     }
 
     private void EnsureDraft()
@@ -785,6 +885,8 @@ public sealed class CashMovement : ICompanyScoped
         };
 
     public void MarkReconciled(Guid reconciliationId) => ReconciliationId = reconciliationId;
+
+    public void ClearReconciliation() => ReconciliationId = null;
 }
 
 public sealed class BankStatementLine
@@ -816,6 +918,17 @@ public sealed class BankStatementLine
     public Guid? MatchedMovementId { get; private set; }
 
     public void Match(Guid? movementId) => MatchedMovementId = movementId;
+
+    /// <summary>A copy with another match. Replacing the element makes EF rewrite the JSON column instead of a JSON_MODIFY on a GUID (unsupported).</summary>
+    public BankStatementLine WithMatch(Guid? movementId) => new()
+    {
+        Uid = Uid,
+        Date = Date,
+        Amount = Amount,
+        Description = Description,
+        Reference = Reference,
+        MatchedMovementId = movementId,
+    };
 }
 
 public enum ReconciliationStatus
@@ -890,14 +1003,18 @@ public sealed class BankReconciliation : AggregateRoot, ICompanyScoped
     public void MatchManually(Guid lineUid, Guid? movementId)
     {
         EnsureDraft();
-        var line = _lines.FirstOrDefault(l => l.Uid == lineUid)
-            ?? throw new DomainException(Error.NotFound("finance.statement-line-not-found", "Statement line not found."));
+        var index = _lines.FindIndex(l => l.Uid == lineUid);
+        if (index < 0)
+        {
+            throw new DomainException(Error.NotFound("finance.statement-line-not-found", "Statement line not found."));
+        }
+
         if (movementId is not null && _lines.Any(l => l.Uid != lineUid && l.MatchedMovementId == movementId))
         {
             throw new DomainException(Error.Conflict("finance.movement-already-matched", "The movement is matched to another line."));
         }
 
-        line.Match(movementId);
+        _lines[index] = _lines[index].WithMatch(movementId);
     }
 
     /// <summary>Completes when every line is matched and the book balance equals the statement balance.</summary>
@@ -916,6 +1033,17 @@ public sealed class BankReconciliation : AggregateRoot, ICompanyScoped
 
         Status = ReconciliationStatus.Completed;
         return Result.Success();
+    }
+
+    /// <summary>Reopens a completed reconciliation so its movements can be corrected (e.g. a receipt reversed). Matches are kept.</summary>
+    public void Reopen()
+    {
+        if (Status != ReconciliationStatus.Completed)
+        {
+            throw new DomainException(Error.Conflict("finance.reconciliation-not-completed", "Only a completed reconciliation can be reopened."));
+        }
+
+        Status = ReconciliationStatus.Draft;
     }
 
     private void EnsureDraft()

@@ -13,7 +13,7 @@ namespace Erp.Modules.Accounting.Application;
 
 // ---------- DTOs ----------
 public sealed record AccountDto(Guid Id, string Code, string NameEn, string NameAr, string Type, string NormalBalance, Guid? ParentId,
-    bool IsPostingAccount, string ControlSubledger, bool AllowManualPosting, string Status, string CashFlowCategory = "None");
+    bool IsPostingAccount, string ControlSubledger, bool AllowManualPosting, string Status, string CashFlowCategory = "None", string ReportGroup = "None");
 
 public sealed record FiscalPeriodDto(Guid Id, int PeriodNo, DateOnly StartDate, DateOnly EndDate, string Status);
 
@@ -44,7 +44,7 @@ public sealed record SeedResultDto(int AccountsCreated, int RulesCreated, IReadO
 internal static class AccountingMapping
 {
     public static AccountDto ToDto(Account a) => new(a.Id, a.Code, a.NameEn, a.NameAr, a.Type.ToString(), a.NormalBalance.ToString(), a.ParentId,
-        a.IsPostingAccount, a.ControlSubledger.ToString(), a.AllowManualPosting, a.Status.ToString(), a.CashFlowCategory.ToString());
+        a.IsPostingAccount, a.ControlSubledger.ToString(), a.AllowManualPosting, a.Status.ToString(), a.CashFlowCategory.ToString(), a.ReportGroup.ToString());
 
     public static FiscalYearDto ToDto(FiscalYear y) => new(y.Id, y.LegalEntityId, y.Code, y.StartDate, y.EndDate,
         y.Periods.Select(p => new FiscalPeriodDto(p.Id, p.PeriodNo, p.StartDate, p.EndDate, p.Status.ToString())).ToList());
@@ -84,7 +84,7 @@ public sealed class ListAccountsHandler(IAccountingDbContext db) : IQueryHandler
 }
 
 public sealed record CreateAccountCommand(string Code, string NameEn, string NameAr, string Type, Guid? ParentId, bool IsPostingAccount,
-    string? ControlSubledger, bool AllowManualPosting = true, string? CashFlowCategory = null) : ICommand<AccountDto>;
+    string? ControlSubledger, bool AllowManualPosting = true, string? CashFlowCategory = null, string? ReportGroup = null) : ICommand<AccountDto>;
 
 public sealed class CreateAccountValidator : AbstractValidator<CreateAccountCommand>
 {
@@ -96,6 +96,7 @@ public sealed class CreateAccountValidator : AbstractValidator<CreateAccountComm
         RuleFor(x => x.Type).Must(t => Enum.TryParse<AccountType>(t, true, out _)).WithMessage("Unknown account type.");
         RuleFor(x => x.ControlSubledger).Must(c => c is null || Enum.TryParse<ControlSubledger>(c, true, out _)).WithMessage("Unknown control sub-ledger.");
         RuleFor(x => x.CashFlowCategory).Must(c => c is null || Enum.TryParse<CashFlowCategory>(c, true, out _)).WithMessage("Unknown cash-flow category.");
+        RuleFor(x => x.ReportGroup).Must(c => c is null || Enum.TryParse<IncomeStatementGroup>(c, true, out _)).WithMessage("Unknown income-statement group.");
     }
 }
 
@@ -125,6 +126,11 @@ public sealed class CreateAccountHandler(IAccountingDbContext db, ITenantContext
         account.SetCashFlowCategory(command.CashFlowCategory is null
             ? (account.IsBalanceSheet && account.IsPostingAccount ? CashFlowCategory.Operating : CashFlowCategory.None)
             : Enum.Parse<CashFlowCategory>(command.CashFlowCategory, true));
+        if (command.ReportGroup is not null)
+        {
+            account.SetReportGroup(Enum.Parse<IncomeStatementGroup>(command.ReportGroup, true));
+        }
+
         db.Accounts.Add(account);
         await db.SaveChangesAsync(cancellationToken);
         return AccountingMapping.ToDto(account);
@@ -169,6 +175,32 @@ public sealed class SetAccountCashFlowCategoryHandler(IAccountingDbContext db) :
         }
 
         account.SetCashFlowCategory(Enum.Parse<CashFlowCategory>(command.Category, true));
+        await db.SaveChangesAsync(cancellationToken);
+        return AccountingMapping.ToDto(account);
+    }
+}
+
+public sealed record SetAccountReportGroupCommand(Guid AccountId, string Group) : ICommand<AccountDto>;
+
+public sealed class SetAccountReportGroupValidator : AbstractValidator<SetAccountReportGroupCommand>
+{
+    public SetAccountReportGroupValidator() =>
+        RuleFor(x => x.Group).Must(c => Enum.TryParse<IncomeStatementGroup>(c, true, out _))
+            .WithMessage("Group must be None, Revenue, CostOfSales, OtherIncome or OperatingExpenses.");
+}
+
+/// <summary>Moves a revenue/expense account to another income-statement section. Statements use the stored group, not the posting rules.</summary>
+public sealed class SetAccountReportGroupHandler(IAccountingDbContext db) : ICommandHandler<SetAccountReportGroupCommand, AccountDto>
+{
+    public async Task<Result<AccountDto>> Handle(SetAccountReportGroupCommand command, CancellationToken cancellationToken)
+    {
+        var account = await db.Accounts.FirstOrDefaultAsync(a => a.Id == command.AccountId, cancellationToken);
+        if (account is null)
+        {
+            return AccountingErrors.AccountNotFound;
+        }
+
+        account.SetReportGroup(Enum.Parse<IncomeStatementGroup>(command.Group, true));
         await db.SaveChangesAsync(cancellationToken);
         return AccountingMapping.ToDto(account);
     }
@@ -220,6 +252,7 @@ public sealed class SeedGenericChartHandler(IAccountingDbContext db, ITenantCont
             var parent = template.Parent is null ? null : byCode[template.Parent];
             var account = Account.Create(companyId, template.Code, template.NameEn, template.NameAr, template.Type, parent, template.Posting, template.Control);
             account.SetCashFlowCategory(GenericChartTemplate.CategoryFor(template));
+            account.SetReportGroup(GenericChartTemplate.ReportGroupFor(template));
             db.Accounts.Add(account);
             byCode[template.Code] = account;
             created++;

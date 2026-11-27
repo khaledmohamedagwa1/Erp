@@ -276,7 +276,16 @@ public sealed class JournalPostingService(
                     accountId = rule.AccountId;
                 }
 
-                journal.AddLine(accountId.Value, line.Debit, line.Credit, line.CostCenterId, line.PartyType, line.PartyId, line.Description, line.BaseAmount);
+                var role = line.AccountId is null ? line.Role : null;
+                if (line.BaseOnly)
+                {
+                    journal.AddBaseOnlyLine(accountId.Value, line.Debit, line.Credit, line.CostCenterId, line.PartyType, line.PartyId, line.Description, role);
+                }
+                else
+                {
+                    journal.AddLine(accountId.Value, line.Debit, line.Credit, line.CostCenterId, line.PartyType, line.PartyId, line.Description, line.BaseAmount,
+                        role, line.Context?.TaxCodeId, line.TaxableAmount);
+                }
             }
         }
         catch (DomainException ex)
@@ -423,6 +432,79 @@ public sealed class LedgerQueries(IAccountingDbContext db) : ILedgerQueries
             BaseCredit = line.BaseCredit,
             LineNo = line.LineNo,
         };
+}
+
+/// <summary>Detailed ledger reads for Finance (bank reconciliation against the GL) and tax reporting.</summary>
+public sealed class AccountLedgerQueries(IAccountingDbContext db) : IAccountLedgerQueries
+{
+    private static readonly string[] TaxRoles = [PostingRoles.OutputTax, PostingRoles.InputTax];
+
+    public async Task<IReadOnlyList<AccountLedgerLine>> GetAccountLinesAsync(Guid legalEntityId, Guid accountId, DateOnly upTo, string? excludeSourceModule,
+        CancellationToken cancellationToken = default)
+    {
+        var query = from line in db.JournalLines.AsNoTracking()
+                    join journal in db.Journals.AsNoTracking() on line.JournalEntryId equals journal.Id
+                    where journal.LegalEntityId == legalEntityId && journal.Status != JournalStatus.Draft && line.AccountId == accountId && journal.JournalDate <= upTo
+                    select new { line, journal };
+        if (excludeSourceModule is not null)
+        {
+            query = query.Where(x => x.journal.SourceModule != excludeSourceModule);
+        }
+
+        var rows = await query.OrderBy(x => x.journal.JournalDate).ThenBy(x => x.journal.Number).ThenBy(x => x.line.LineNo).ToListAsync(cancellationToken);
+        return rows.Select(x => new AccountLedgerLine(x.journal.Id, x.line.Id, x.journal.Number ?? string.Empty, x.journal.JournalDate, x.journal.SourceModule,
+            x.journal.SourceDocType, x.journal.SourceDocId, x.journal.Currency, x.journal.ExchangeRate, x.line.Debit, x.line.Credit, x.line.BaseDebit, x.line.BaseCredit,
+            x.line.Description ?? x.journal.Description)).ToList();
+    }
+
+    public async Task<Guid?> ResolveRoleAccountAsync(Guid legalEntityId, string role, CancellationToken cancellationToken = default)
+    {
+        var rules = await db.PostingRules.AsNoTracking().Where(r => r.Role == role).ToListAsync(cancellationToken);
+        return PostingRuleResolver.Resolve(rules, role, legalEntityId, null, null, null, null)?.AccountId;
+    }
+
+    public async Task<IReadOnlyList<TaxLedgerLine>> GetTaxLinesAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default)
+    {
+        var (start, end) = (from, to);
+        var rows = await (from line in db.JournalLines.AsNoTracking()
+                          join journal in db.Journals.AsNoTracking() on line.JournalEntryId equals journal.Id
+                          where journal.Status != JournalStatus.Draft && journal.JournalDate >= start && journal.JournalDate <= end
+                                && journal.SourceDocType != AccountingDocumentTypes.YearEndClose
+                                && line.PostingRole != null && TaxRoles.Contains(line.PostingRole)
+                          orderby journal.JournalDate, journal.Number, line.LineNo
+                          select new
+                          {
+                              journal.LegalEntityId, journal.JournalDate, journal.Number, journal.SourceModule, journal.SourceDocType, journal.SourceDocId,
+                              line.PostingRole, line.TaxCodeId, line.BaseDebit, line.BaseCredit, line.TaxableBase,
+                          }).ToListAsync(cancellationToken);
+        return rows.Select(r =>
+        {
+            // Output tax grows on the credit side; input tax on the debit side.
+            var sign = r.PostingRole == PostingRoles.OutputTax ? (r.BaseCredit > 0 ? 1 : -1) : (r.BaseDebit > 0 ? 1 : -1);
+            var amount = r.PostingRole == PostingRoles.OutputTax ? r.BaseCredit - r.BaseDebit : r.BaseDebit - r.BaseCredit;
+            return new TaxLedgerLine(r.LegalEntityId, r.JournalDate, r.Number ?? string.Empty, r.SourceModule, r.SourceDocType, r.SourceDocId, r.PostingRole!,
+                r.TaxCodeId, amount, r.TaxableBase is null ? null : sign * r.TaxableBase.Value);
+        }).ToList();
+    }
+
+    public async Task<IReadOnlyList<TaxAccountMovement>> GetTaxAccountMovementsAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default)
+    {
+        var (start, end) = (from, to);
+        var mapped = await db.PostingRules.AsNoTracking().Where(r => TaxRoles.Contains(r.Role))
+            .Select(r => new { r.Role, r.AccountId }).Distinct().ToListAsync(cancellationToken);
+        var accountIds = mapped.Select(m => m.AccountId).Distinct().ToList();
+        var totals = await (from line in db.JournalLines.AsNoTracking()
+                            join journal in db.Journals.AsNoTracking() on line.JournalEntryId equals journal.Id
+                            where journal.Status != JournalStatus.Draft && journal.JournalDate >= start && journal.JournalDate <= end
+                                  && journal.SourceDocType != AccountingDocumentTypes.YearEndClose && accountIds.Contains(line.AccountId)
+                            group line by line.AccountId into g
+                            select new { AccountId = g.Key, NetCredit = g.Sum(l => l.BaseCredit - l.BaseDebit) }).ToListAsync(cancellationToken);
+        var accounts = await db.Accounts.AsNoTracking().Where(a => accountIds.Contains(a.Id)).ToDictionaryAsync(a => a.Id, cancellationToken);
+        return accountIds.Select(id => new TaxAccountMovement(id, accounts[id].Code, accounts[id].NameEn,
+                string.Join(",", mapped.Where(m => m.AccountId == id).Select(m => m.Role).Distinct().Order(StringComparer.Ordinal)),
+                totals.FirstOrDefault(t => t.AccountId == id)?.NetCredit ?? 0m))
+            .OrderBy(m => m.Code, StringComparer.Ordinal).ToList();
+    }
 }
 
 /// <summary>Flat ledger row (member-initialised so EF can group and aggregate over it).</summary>

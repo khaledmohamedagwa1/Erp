@@ -31,6 +31,8 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options,
 
     public DbSet<FxRevaluationRun> FxRevaluationRuns => Set<FxRevaluationRun>();
 
+    public DbSet<WithholdingCertificate> WithholdingCertificates => Set<WithholdingCertificate>();
+
     protected override void ConfigureModel(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<OpenItem>(b =>
@@ -68,6 +70,7 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options,
             b.Property(x => x.BaseRelieved).HasPrecision(19, 4);
             b.Property(x => x.SettlementBase).HasPrecision(19, 4);
             b.Property(x => x.RealizedFxBase).HasPrecision(19, 4);
+            b.Property(x => x.SettlementAmount).HasPrecision(19, 4);
             b.HasIndex(TenantIdProperty, nameof(Allocation.OpenItemId));
             b.HasIndex(TenantIdProperty, nameof(Allocation.SettlementId));
             b.HasOne<OpenItem>().WithMany().HasForeignKey(x => x.OpenItemId).OnDelete(DeleteBehavior.NoAction);
@@ -103,6 +106,8 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options,
             b.Property(x => x.WithholdingBase).HasPrecision(19, 4);
             b.Property(x => x.WithholdingAmount).HasPrecision(19, 4);
             b.Property(x => x.UnallocatedAmount).HasPrecision(19, 4);
+            b.Property(x => x.ReversalReason).HasMaxLength(500);
+            b.HasIndex(TenantIdProperty, nameof(Settlement.WithholdingCertificateId));
             b.Property(x => x.Reference).HasMaxLength(100);
             b.Property(x => x.Description).HasMaxLength(500);
             b.Property(x => x.Status).HasConversion<string>().HasMaxLength(10);
@@ -112,6 +117,7 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options,
             {
                 a.ToJson("RequestedAllocations");
                 a.Property(x => x.Amount).HasPrecision(19, 4);
+                a.Property(x => x.SettlementAmount).HasPrecision(19, 4);
             });
             b.Navigation(x => x.Allocations).UsePropertyAccessMode(PropertyAccessMode.Field);
             b.HasIndex(TenantIdProperty, nameof(Settlement.CompanyId), nameof(Settlement.Direction), nameof(Settlement.PartyId));
@@ -171,6 +177,9 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options,
             b.Property(x => x.Reference).HasMaxLength(100).IsRequired();
             b.Property(x => x.Description).HasMaxLength(500);
             b.HasIndex(TenantIdProperty, nameof(CashMovement.CashBankAccountId), nameof(CashMovement.Date));
+            // One imported movement per general-ledger line (concurrent syncs cannot duplicate).
+            b.HasIndex(TenantIdProperty, nameof(CashMovement.CashBankAccountId), nameof(CashMovement.SourceDocType), nameof(CashMovement.SourceDocId))
+                .IsUnique().HasFilter("[SourceDocType] = 'GlJournalLine'").HasDatabaseName("UX_CashMovement_GlJournalLine");
             b.HasOne<CashBankAccount>().WithMany().HasForeignKey(x => x.CashBankAccountId).OnDelete(DeleteBehavior.NoAction);
         });
 
@@ -208,6 +217,34 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options,
             });
             b.Navigation(x => x.Lines).UsePropertyAccessMode(PropertyAccessMode.Field);
             b.HasIndex(TenantIdProperty, nameof(FxRevaluationRun.LegalEntityId), nameof(FxRevaluationRun.AsOf)).IsUnique();
+        });
+
+        modelBuilder.Entity<WithholdingCertificate>(b =>
+        {
+            b.ToTable("WithholdingCertificate");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.Kind).HasConversion<string>().HasMaxLength(20);
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            b.Property(x => x.Number).HasMaxLength(50).IsRequired();
+            b.Property(x => x.ExternalReference).HasMaxLength(100);
+            b.Property(x => x.Notes).HasMaxLength(500);
+            b.Property(x => x.TotalTaxableBase).HasPrecision(19, 4);
+            b.Property(x => x.TotalWithheldBase).HasPrecision(19, 4);
+            b.Ignore(x => x.PartyType);
+            b.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToJson("Lines");
+                l.Property(x => x.SettlementNumber).HasMaxLength(50);
+                l.Property(x => x.Currency).HasMaxLength(3);
+                l.Property(x => x.ExchangeRate).HasPrecision(18, 8);
+                l.Property(x => x.TaxableAmount).HasPrecision(19, 4);
+                l.Property(x => x.WithheldAmount).HasPrecision(19, 4);
+                l.Property(x => x.TaxableBase).HasPrecision(19, 4);
+                l.Property(x => x.WithheldBase).HasPrecision(19, 4);
+            });
+            b.Navigation(x => x.Lines).UsePropertyAccessMode(PropertyAccessMode.Field);
+            b.HasIndex(TenantIdProperty, nameof(WithholdingCertificate.CompanyId), nameof(WithholdingCertificate.Kind), nameof(WithholdingCertificate.PartyId));
         });
     }
 }

@@ -107,6 +107,23 @@ public static class GenericChartTemplate
             ? CashFlowCategory.None
             : CashFlowCategories.GetValueOrDefault(account.Code, CashFlowCategory.Operating);
 
+    /// <summary>
+    /// Income-statement section of a template account, derived once at seeding from the role mapping (net revenue and
+    /// cost-of-sales roles); afterwards it is stored on the account and editable.
+    /// </summary>
+    public static IncomeStatementGroup ReportGroupFor(TemplateAccount account)
+    {
+        if (account.Type is not (AccountType.Revenue or AccountType.Expense))
+        {
+            return IncomeStatementGroup.None;
+        }
+
+        var roles = RoleAccounts.Where(kv => kv.Value == account.Code).Select(kv => kv.Key).ToList();
+        return account.Type == AccountType.Revenue
+            ? roles.Any(r => FinancialStatementBuilder.OperatingRevenueRoles.Contains(r)) ? IncomeStatementGroup.Revenue : IncomeStatementGroup.OtherIncome
+            : roles.Any(r => FinancialStatementBuilder.CostOfSalesRoles.Contains(r)) ? IncomeStatementGroup.CostOfSales : IncomeStatementGroup.OperatingExpenses;
+    }
+
     public static readonly IReadOnlyDictionary<string, string> RoleAccounts = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         [PostingRoles.CustomerReceivable] = "1210",

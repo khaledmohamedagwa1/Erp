@@ -17,15 +17,21 @@ namespace Erp.Modules.Finance.Application;
 public sealed record CashBankAccountDto(Guid Id, Guid LegalEntityId, string Kind, string Code, string Name, string Currency, Guid? GlAccountId,
     string? BankName, string? AccountNumber, string? Iban, bool IsActive, decimal Balance, decimal BaseBalance);
 
-public sealed record AllocationInput(Guid OpenItemId, decimal Amount);
+/// <summary>
+/// An allocation request. <see cref="Amount"/> is in the open item's currency. For an open item in another currency than the receipt/payment,
+/// <see cref="SettlementAmount"/> is the amount taken from the receipt/payment in its own currency (agreed amount); when omitted it is
+/// converted through the functional currency at the spot rates of the document date.
+/// </summary>
+public sealed record AllocationInput(Guid OpenItemId, decimal Amount, decimal? SettlementAmount = null);
 
 public sealed record AllocationDto(Guid Id, Guid OpenItemId, string SettlementKind, Guid SettlementId, string Reference, DateOnly Date, decimal Amount,
-    decimal BaseRelieved, decimal SettlementBase, decimal RealizedFxBase);
+    decimal BaseRelieved, decimal SettlementBase, decimal RealizedFxBase, decimal? SettlementAmount = null, Guid? ReversalOfId = null);
 
 public sealed record SettlementDto(Guid Id, string Direction, Guid LegalEntityId, Guid PartyId, string? Number, DateOnly Date, string Method,
     Guid CashBankAccountId, string Currency, decimal ExchangeRate, decimal Amount, Guid? WithholdingTaxGroupId, decimal WithholdingBase,
     decimal WithholdingAmount, decimal SettlementValue, string? Reference, string? Description, string Status, decimal UnallocatedAmount,
-    Guid? JournalId, IReadOnlyList<AllocationInput> RequestedAllocations, IReadOnlyList<AllocationDto> Allocations);
+    Guid? JournalId, IReadOnlyList<AllocationInput> RequestedAllocations, IReadOnlyList<AllocationDto> Allocations,
+    DateOnly? ReversalDate = null, string? ReversalReason = null, Guid? WithholdingCertificateId = null);
 
 public sealed record TransferDto(Guid Id, Guid LegalEntityId, string? Number, DateOnly Date, Guid FromAccountId, decimal FromAmount, decimal FromRate,
     Guid ToAccountId, decimal ToAmount, decimal ToRate, decimal Charges, string? Description, string Status, Guid? JournalId);
@@ -58,11 +64,11 @@ internal static class FinanceMapping
     public static SettlementDto ToDto(Settlement s, IEnumerable<Allocation> allocations) => new(s.Id, s.Direction.ToString(), s.LegalEntityId, s.PartyId,
         s.Number, s.Date, s.Method.ToString(), s.CashBankAccountId, s.Currency, s.ExchangeRate, s.Amount, s.WithholdingTaxGroupId, s.WithholdingBase,
         s.WithholdingAmount, s.SettlementValue, s.Reference, s.Description, s.Status.ToString(), s.UnallocatedAmount, s.JournalId,
-        s.Allocations.Select(a => new AllocationInput(a.OpenItemId, a.Amount)).ToList(),
-        allocations.Select(ToDto).ToList());
+        s.Allocations.Select(a => new AllocationInput(a.OpenItemId, a.Amount, a.SettlementAmount)).ToList(),
+        allocations.Select(ToDto).ToList(), s.ReversalDate, s.ReversalReason, s.WithholdingCertificateId);
 
     public static AllocationDto ToDto(Allocation a) => new(a.Id, a.OpenItemId, a.SettlementKind.ToString(), a.SettlementId, a.SettlementReference, a.Date,
-        a.Amount, a.BaseRelieved, a.SettlementBase, a.RealizedFxBase);
+        a.Amount, a.BaseRelieved, a.SettlementBase, a.RealizedFxBase, a.SettlementAmount, a.ReversalOfId);
 
     public static TransferDto ToDto(InternalTransfer t) => new(t.Id, t.LegalEntityId, t.Number, t.Date, t.FromAccountId, t.FromAmount, t.FromRate,
         t.ToAccountId, t.ToAmount, t.ToRate, t.Charges, t.Description, t.Status.ToString(), t.JournalId);
@@ -198,7 +204,11 @@ public sealed class CreateSettlementValidator : AbstractValidator<CreateSettleme
         RuleFor(x => x.WithholdingBase).GreaterThan(0).When(x => x.WithholdingTaxGroupId is not null);
         RuleFor(x => x.Reference).MaximumLength(100);
         RuleFor(x => x.Description).MaximumLength(500);
-        RuleForEach(x => x.Allocations).ChildRules(a => a.RuleFor(x => x.Amount).GreaterThan(0));
+        RuleForEach(x => x.Allocations).ChildRules(a =>
+        {
+            a.RuleFor(x => x.Amount).GreaterThan(0);
+            a.RuleFor(x => x.SettlementAmount).GreaterThan(0).When(x => x.SettlementAmount is not null);
+        });
     }
 }
 
@@ -253,14 +263,20 @@ public sealed class CreateSettlementHandler(
             settlement.SetWithholding(groupId, command.WithholdingBase.Value, tax.Value.TotalWithholding);
         }
 
-        var requested = (command.Allocations ?? []).Select(a => new RequestedAllocation(a.OpenItemId, a.Amount)).ToList();
-        var check = await SettlementRules.LoadAllocatableAsync(db, settlement, requested, cancellationToken);
+        var requested = await SettlementRules.ResolveRequestedAsync(db, scope, command.Allocations ?? [], settlement.Currency, le.Value.FunctionalCurrency,
+            command.Date, settlement.ExchangeRate, cancellationToken);
+        if (requested.IsFailure)
+        {
+            return requested.Error;
+        }
+
+        var check = await SettlementRules.LoadAllocatableAsync(db, settlement, requested.Value, cancellationToken);
         if (check.IsFailure)
         {
             return check.Error;
         }
 
-        settlement.SetAllocations(requested);
+        settlement.SetAllocations(requested.Value);
         db.Settlements.Add(settlement);
         await db.SaveChangesAsync(cancellationToken);
         return FinanceMapping.ToDto(settlement, []);
@@ -269,11 +285,58 @@ public sealed class CreateSettlementHandler(
 
 internal static class SettlementRules
 {
+    /// <summary>
+    /// Turns allocation inputs into requested allocations, converting open items in another currency to the settlement currency (an explicit
+    /// settlement amount wins; otherwise spot rates of <paramref name="date"/> through the functional currency).
+    /// </summary>
+    public static async Task<Result<IReadOnlyList<RequestedAllocation>>> ResolveRequestedAsync(IFinanceDbContext db, FinanceScope scope,
+        IReadOnlyList<AllocationInput> inputs, string settlementCurrency, string functionalCurrency, DateOnly date, decimal? settlementRate, CancellationToken ct)
+    {
+        if (inputs.Count == 0)
+        {
+            return Array.Empty<RequestedAllocation>();
+        }
+
+        var ids = inputs.Select(a => a.OpenItemId).Distinct().ToList();
+        var currencies = await db.OpenItems.AsNoTracking().Where(i => ids.Contains(i.Id)).ToDictionaryAsync(i => i.Id, i => i.Currency, ct);
+        var result = new List<RequestedAllocation>();
+        foreach (var input in inputs)
+        {
+            if (!currencies.TryGetValue(input.OpenItemId, out var itemCurrency) || string.Equals(itemCurrency, settlementCurrency, StringComparison.OrdinalIgnoreCase))
+            {
+                // Same currency (or unknown item: reported by LoadAsync).
+                result.Add(new RequestedAllocation(input.OpenItemId, input.Amount));
+                continue;
+            }
+
+            var settlementAmount = input.SettlementAmount;
+            if (settlementAmount is null)
+            {
+                var converted = await scope.CrossAmountAsync(input.Amount, itemCurrency, settlementCurrency, functionalCurrency, date, settlementRate, ct);
+                if (converted.IsFailure)
+                {
+                    return converted.Error;
+                }
+
+                settlementAmount = converted.Value;
+            }
+
+            if (settlementAmount <= 0)
+            {
+                return FinanceErrors.InvalidAmount;
+            }
+
+            result.Add(new RequestedAllocation(input.OpenItemId, input.Amount, settlementAmount));
+        }
+
+        return result;
+    }
+
     /// <summary>Loads the open items being allocated and checks party, legal entity, currency and open amounts.</summary>
-    public static async Task<Result<IReadOnlyList<(OpenItem Item, decimal Amount)>>> LoadAllocatableAsync(
+    public static async Task<Result<IReadOnlyList<AllocationLine>>> LoadAllocatableAsync(
         IFinanceDbContext db, Settlement settlement, IReadOnlyList<RequestedAllocation> requested, CancellationToken ct)
     {
-        if (requested.Sum(a => a.Amount) > settlement.SettlementValue)
+        if (requested.Sum(a => a.AppliedAmount) > settlement.SettlementValue)
         {
             return FinanceErrors.OverAllocation;
         }
@@ -281,12 +344,12 @@ internal static class SettlementRules
         return await LoadAsync(db, settlement.PartyType, settlement.PartyId, settlement.LegalEntityId, settlement.Currency, requested, ct);
     }
 
-    public static async Task<Result<IReadOnlyList<(OpenItem Item, decimal Amount)>>> LoadAsync(
+    public static async Task<Result<IReadOnlyList<AllocationLine>>> LoadAsync(
         IFinanceDbContext db, PartyKind partyType, Guid partyId, Guid legalEntityId, string currency, IReadOnlyList<RequestedAllocation> requested, CancellationToken ct)
     {
         var ids = requested.Select(a => a.OpenItemId).Distinct().ToList();
         var items = await db.OpenItems.Where(i => ids.Contains(i.Id)).ToDictionaryAsync(i => i.Id, ct);
-        var result = new List<(OpenItem, decimal)>();
+        var result = new List<AllocationLine>();
         foreach (var group in requested.GroupBy(a => a.OpenItemId))
         {
             if (!items.TryGetValue(group.Key, out var item) || item.PartyType != partyType || item.PartyId != partyId || item.LegalEntityId != legalEntityId || item.Sign < 0)
@@ -294,7 +357,8 @@ internal static class SettlementRules
                 return FinanceAppErrors.OpenItemNotFound;
             }
 
-            if (!string.Equals(item.Currency, currency, StringComparison.OrdinalIgnoreCase))
+            var sameCurrency = string.Equals(item.Currency, currency, StringComparison.OrdinalIgnoreCase);
+            if (!sameCurrency && group.Any(a => a.SettlementAmount is null))
             {
                 return FinanceErrors.CurrencyMismatch;
             }
@@ -305,7 +369,7 @@ internal static class SettlementRules
                 return FinanceErrors.AllocationExceedsOpen;
             }
 
-            result.Add((item, amount));
+            result.Add(new AllocationLine(item, amount, sameCurrency ? amount : group.Sum(a => a.AppliedAmount)));
         }
 
         return result;
@@ -366,40 +430,44 @@ public sealed class PostSettlementHandler(
         var isReceipt = settlement.Direction == SettlementDirection.Receipt;
         var number = await FinanceNumbers.NextAsync(numbers, settlement.CompanyId, settlement.LegalEntityId, isReceipt ? FinanceDocTypes.Receipt : FinanceDocTypes.Payment,
             isReceipt ? "RCT" : "PAY", settlement.Date, cancellationToken);
-        var outcome = allocations.Apply(items.Value, isReceipt ? SettlementKind.Receipt : SettlementKind.Payment, settlement.Id, number, settlement.Date, settlement.ExchangeRate);
+        var outcome = allocations.Apply(items.Value, isReceipt ? SettlementKind.Receipt : SettlementKind.Payment, settlement.Id, settlement.Currency, number,
+            settlement.Date, settlement.ExchangeRate);
 
+        // One journal in the settlement's currency and rate. Relieved items keep their historical base; the remainder is the advance;
+        // the realized exchange difference is a functional-currency-only line.
         var cashBase = FinanceMath.ToBase(settlement.Amount, settlement.ExchangeRate);
         var withheldBase = FinanceMath.ToBase(settlement.WithholdingAmount, settlement.ExchangeRate);
-        var advanceBase = cashBase + withheldBase - outcome.SettlementBase;
-        var gain = FinanceMath.RealizedFx(settlement.PartyType, outcome.RelievedBase, outcome.SettlementBase);
+        var unallocated = settlement.SettlementValue - outcome.SettlementAmount;
+        var settlementBase = unallocated == 0 ? cashBase + withheldBase : outcome.SettlementBase;
+        var advanceBase = cashBase + withheldBase - settlementBase;
+        var gain = FinanceMath.RealizedFx(settlement.PartyType, outcome.RelievedBase, settlementBase);
         var party = FinanceMapping.Party(postingGroup);
         var lines = new JournalLines();
         var cashRole = account.GlAccountId is null ? account.Role : null;
         if (isReceipt)
         {
-            lines.Debit(cashRole, account.GlAccountId, cashBase, description: account.Code)
-                .Debit(PostingRoles.WithholdingTaxReceivable, null, withheldBase)
-                .Credit(PostingRoles.CustomerReceivable, null, outcome.RelievedBase, party, PartyKind.Customer, settlement.PartyId)
-                .Credit(PostingRoles.CustomerAdvance, null, advanceBase, party, PartyKind.Customer, settlement.PartyId);
+            lines.DebitTx(cashRole, account.GlAccountId, settlement.Amount, cashBase, description: account.Code)
+                .DebitTx(PostingRoles.WithholdingTaxReceivable, null, settlement.WithholdingAmount, withheldBase)
+                .CreditTx(PostingRoles.CustomerReceivable, null, outcome.SettlementAmount, outcome.RelievedBase, party, PartyKind.Customer, settlement.PartyId)
+                .CreditTx(PostingRoles.CustomerAdvance, null, unallocated, advanceBase, party, PartyKind.Customer, settlement.PartyId);
         }
         else
         {
-            lines.Credit(cashRole, account.GlAccountId, cashBase, description: account.Code)
-                .Credit(PostingRoles.WithholdingTaxPayable, null, withheldBase)
-                .Debit(PostingRoles.SupplierPayable, null, outcome.RelievedBase, party, PartyKind.Supplier, settlement.PartyId)
-                .Debit(PostingRoles.SupplierAdvance, null, advanceBase, party, PartyKind.Supplier, settlement.PartyId);
+            lines.CreditTx(cashRole, account.GlAccountId, settlement.Amount, cashBase, description: account.Code)
+                .CreditTx(PostingRoles.WithholdingTaxPayable, null, settlement.WithholdingAmount, withheldBase)
+                .DebitTx(PostingRoles.SupplierPayable, null, outcome.SettlementAmount, outcome.RelievedBase, party, PartyKind.Supplier, settlement.PartyId)
+                .DebitTx(PostingRoles.SupplierAdvance, null, unallocated, advanceBase, party, PartyKind.Supplier, settlement.PartyId);
         }
 
-        lines.Fx(gain, PostingRoles.RealizedFxGain, PostingRoles.RealizedFxLoss);
+        lines.FxBaseOnly(gain, PostingRoles.RealizedFxGain, PostingRoles.RealizedFxLoss);
         var posted = await journals.PostAsync(new JournalRequest(settlement.LegalEntityId, settlement.Date, SourceModules.Finance,
             isReceipt ? FinanceDocTypes.Receipt : FinanceDocTypes.Payment, settlement.Id, "post",
-            $"{(isReceipt ? "Receipt" : "Payment")} {number}", le.Value.FunctionalCurrency, 1m, lines.Lines), cancellationToken);
+            $"{(isReceipt ? "Receipt" : "Payment")} {number}", settlement.Currency, settlement.ExchangeRate, lines.Lines), cancellationToken);
         if (posted.IsFailure)
         {
             return posted.Error;
         }
 
-        var unallocated = settlement.SettlementValue - items.Value.Sum(i => i.Amount);
         settlement.MarkPosted(number, posted.Value.JournalId, unallocated);
         db.CashMovements.Add(CashMovement.Create(account, settlement.Date, isReceipt ? settlement.Amount : -settlement.Amount, isReceipt ? cashBase : -cashBase,
             isReceipt ? FinanceDocTypes.Receipt : FinanceDocTypes.Payment, settlement.Id, settlement.Reference ?? number, settlement.Description));
@@ -416,7 +484,11 @@ public sealed class AllocateAdvanceValidator : AbstractValidator<AllocateAdvance
     public AllocateAdvanceValidator()
     {
         RuleFor(x => x.Allocations).NotEmpty();
-        RuleForEach(x => x.Allocations).ChildRules(a => a.RuleFor(x => x.Amount).GreaterThan(0));
+        RuleForEach(x => x.Allocations).ChildRules(a =>
+        {
+            a.RuleFor(x => x.Amount).GreaterThan(0);
+            a.RuleFor(x => x.SettlementAmount).GreaterThan(0).When(x => x.SettlementAmount is not null);
+        });
     }
 }
 
@@ -440,45 +512,53 @@ public sealed class AllocateAdvanceHandler(
             return Error.Conflict("finance.not-posted", "Only posted receipts and payments have an advance to allocate.");
         }
 
-        var requested = command.Allocations.Select(a => new RequestedAllocation(a.OpenItemId, a.Amount)).ToList();
-        if (requested.Sum(a => a.Amount) > settlement.UnallocatedAmount)
-        {
-            return FinanceErrors.OverAllocation;
-        }
-
         var le = await scope.LegalEntityAsync(settlement.LegalEntityId, cancellationToken);
         if (le.IsFailure)
         {
             return le.Error;
         }
 
-        var items = await SettlementRules.LoadAsync(db, settlement.PartyType, settlement.PartyId, settlement.LegalEntityId, settlement.Currency, requested, cancellationToken);
+        // Cross-currency amounts use today's market rates; the advance itself is relieved at the settlement's historical rate.
+        var requested = await SettlementRules.ResolveRequestedAsync(db, scope, command.Allocations, settlement.Currency, le.Value.FunctionalCurrency, command.Date,
+            command.Date == settlement.Date ? settlement.ExchangeRate : null, cancellationToken);
+        if (requested.IsFailure)
+        {
+            return requested.Error;
+        }
+
+        if (requested.Value.Sum(a => a.AppliedAmount) > settlement.UnallocatedAmount)
+        {
+            return FinanceErrors.OverAllocation;
+        }
+
+        var items = await SettlementRules.LoadAsync(db, settlement.PartyType, settlement.PartyId, settlement.LegalEntityId, settlement.Currency, requested.Value, cancellationToken);
         if (items.IsFailure)
         {
             return items.Error;
         }
 
         var batchId = SequentialGuid.New();
-        var outcome = allocations.Apply(items.Value, SettlementKind.Advance, settlement.Id, settlement.Number ?? string.Empty, command.Date, settlement.ExchangeRate);
-        settlement.ConsumeAdvance(requested.Sum(a => a.Amount));
+        var outcome = allocations.Apply(items.Value, SettlementKind.Advance, settlement.Id, settlement.Currency, settlement.Number ?? string.Empty, command.Date,
+            settlement.ExchangeRate);
+        settlement.ConsumeAdvance(outcome.SettlementAmount);
         var gain = FinanceMath.RealizedFx(settlement.PartyType, outcome.RelievedBase, outcome.SettlementBase);
         var postingGroup = items.Value[0].Item.PartyPostingGroup;
         var party = FinanceMapping.Party(postingGroup);
         var lines = new JournalLines();
         if (settlement.PartyType == PartyKind.Customer)
         {
-            lines.Debit(PostingRoles.CustomerAdvance, null, outcome.SettlementBase, party, PartyKind.Customer, settlement.PartyId)
-                .Credit(PostingRoles.CustomerReceivable, null, outcome.RelievedBase, party, PartyKind.Customer, settlement.PartyId);
+            lines.DebitTx(PostingRoles.CustomerAdvance, null, outcome.SettlementAmount, outcome.SettlementBase, party, PartyKind.Customer, settlement.PartyId)
+                .CreditTx(PostingRoles.CustomerReceivable, null, outcome.SettlementAmount, outcome.RelievedBase, party, PartyKind.Customer, settlement.PartyId);
         }
         else
         {
-            lines.Credit(PostingRoles.SupplierAdvance, null, outcome.SettlementBase, party, PartyKind.Supplier, settlement.PartyId)
-                .Debit(PostingRoles.SupplierPayable, null, outcome.RelievedBase, party, PartyKind.Supplier, settlement.PartyId);
+            lines.CreditTx(PostingRoles.SupplierAdvance, null, outcome.SettlementAmount, outcome.SettlementBase, party, PartyKind.Supplier, settlement.PartyId)
+                .DebitTx(PostingRoles.SupplierPayable, null, outcome.SettlementAmount, outcome.RelievedBase, party, PartyKind.Supplier, settlement.PartyId);
         }
 
-        lines.Fx(gain, PostingRoles.RealizedFxGain, PostingRoles.RealizedFxLoss);
+        lines.FxBaseOnly(gain, PostingRoles.RealizedFxGain, PostingRoles.RealizedFxLoss);
         var posted = await journals.PostAsync(new JournalRequest(settlement.LegalEntityId, command.Date, SourceModules.Finance, FinanceDocTypes.AdvanceAllocation,
-            batchId, "allocation", $"Allocation of advance {settlement.Number}", le.Value.FunctionalCurrency, 1m, lines.Lines), cancellationToken);
+            batchId, "allocation", $"Allocation of advance {settlement.Number}", settlement.Currency, settlement.ExchangeRate, lines.Lines), cancellationToken);
         if (posted.IsFailure)
         {
             return posted.Error;
@@ -665,13 +745,28 @@ public sealed class PostTransferHandler(IFinanceDbContext db, FinanceScope scope
         var sentBase = FinanceMath.ToBase(transfer.FromAmount, transfer.FromRate);
         var chargesBase = FinanceMath.ToBase(transfer.Charges, transfer.FromRate);
         var receivedBase = FinanceMath.ToBase(transfer.ToAmount, transfer.ToRate);
-        var lines = new JournalLines()
-            .Debit(to.GlAccountId is null ? to.Role : null, to.GlAccountId, receivedBase, description: to.Code)
-            .Debit(PostingRoles.BankCharges, null, chargesBase)
-            .Credit(from.GlAccountId is null ? from.Role : null, from.GlAccountId, sentBase + chargesBase, description: from.Code)
-            .Fx(receivedBase - sentBase, PostingRoles.RealizedFxGain, PostingRoles.RealizedFxLoss);
+        var sameCurrency = string.Equals(from.Currency, to.Currency, StringComparison.OrdinalIgnoreCase);
+        var lines = new JournalLines();
+        if (sameCurrency)
+        {
+            // Both accounts in one currency: the journal carries that currency (amounts and bases fixed per side).
+            lines.DebitTx(to.GlAccountId is null ? to.Role : null, to.GlAccountId, transfer.ToAmount, receivedBase, description: to.Code)
+                .DebitTx(PostingRoles.BankCharges, null, transfer.Charges, chargesBase)
+                .CreditTx(from.GlAccountId is null ? from.Role : null, from.GlAccountId, transfer.FromAmount + transfer.Charges, sentBase + chargesBase, description: from.Code)
+                .FxBaseOnly(receivedBase - sentBase, PostingRoles.RealizedFxGain, PostingRoles.RealizedFxLoss);
+        }
+        else
+        {
+            // Two currencies cannot share one transaction currency: the journal is in the functional currency.
+            lines.Debit(to.GlAccountId is null ? to.Role : null, to.GlAccountId, receivedBase, description: to.Code)
+                .Debit(PostingRoles.BankCharges, null, chargesBase)
+                .Credit(from.GlAccountId is null ? from.Role : null, from.GlAccountId, sentBase + chargesBase, description: from.Code)
+                .Fx(receivedBase - sentBase, PostingRoles.RealizedFxGain, PostingRoles.RealizedFxLoss);
+        }
+
         var posted = await journals.PostAsync(new JournalRequest(transfer.LegalEntityId, transfer.Date, SourceModules.Finance, FinanceDocTypes.InternalTransfer,
-            transfer.Id, "post", $"Internal transfer {number}", le.Value.FunctionalCurrency, 1m, lines.Lines), cancellationToken);
+            transfer.Id, "post", $"Internal transfer {number}", sameCurrency ? from.Currency : le.Value.FunctionalCurrency, sameCurrency ? transfer.FromRate : 1m,
+            lines.Lines), cancellationToken);
         if (posted.IsFailure)
         {
             return posted.Error;
@@ -837,15 +932,15 @@ public sealed class PostExpenseHandler(
         {
             var costBase = FinanceMath.ToBase(line.NetAmount + line.NonRecoverableTax, expense.ExchangeRate);
             var taxBase = FinanceMath.ToBase(line.RecoverableTax, expense.ExchangeRate);
-            lines.Debit(null, line.AccountId, costBase, costCenterId: line.CostCenterId, description: line.Description)
-                .Debit(PostingRoles.InputTax, null, taxBase, new PostingContext(TaxCodeId: line.RecoverableTaxCodeId));
+            lines.DebitTx(null, line.AccountId, line.NetAmount + line.NonRecoverableTax, costBase, costCenterId: line.CostCenterId, description: line.Description)
+                .DebitTx(PostingRoles.InputTax, null, line.RecoverableTax, taxBase, new PostingContext(TaxCodeId: line.RecoverableTaxCodeId), taxableAmount: line.NetAmount);
             totalBase += costBase + taxBase;
         }
 
         if (expense.Payee == ExpensePayee.CashBank)
         {
             var account = await db.CashBankAccounts.FirstAsync(a => a.Id == expense.CashBankAccountId, cancellationToken);
-            lines.Credit(account.GlAccountId is null ? account.Role : null, account.GlAccountId, totalBase, description: account.Code);
+            lines.CreditTx(account.GlAccountId is null ? account.Role : null, account.GlAccountId, expense.Total, totalBase, description: account.Code);
             db.CashMovements.Add(CashMovement.Create(account, expense.Date, -expense.Total, -totalBase, FinanceDocTypes.Expense, expense.Id, expense.Reference ?? number, expense.Description));
         }
         else
@@ -856,7 +951,7 @@ public sealed class PostExpenseHandler(
                 return FinanceAppErrors.PartyNotFound;
             }
 
-            lines.Credit(PostingRoles.SupplierPayable, null, totalBase, FinanceMapping.Party(supplier.PostingGroup), PartyKind.Supplier, supplier.Id);
+            lines.CreditTx(PostingRoles.SupplierPayable, null, expense.Total, totalBase, FinanceMapping.Party(supplier.PostingGroup), PartyKind.Supplier, supplier.Id);
             var items = await subledger.CreateOpenItemsAsync(new OpenItemRequest(PartyKind.Supplier, supplier.Id, expense.LegalEntityId, SourceModules.Finance,
                 FinanceDocTypes.Expense, expense.Id, expense.Reference ?? number, expense.Date, expense.Currency, expense.ExchangeRate, expense.Total, supplier.PaymentTermsId), cancellationToken);
             if (items.IsFailure)
@@ -866,7 +961,7 @@ public sealed class PostExpenseHandler(
         }
 
         var posted = await journals.PostAsync(new JournalRequest(expense.LegalEntityId, expense.Date, SourceModules.Finance, FinanceDocTypes.Expense,
-            expense.Id, "post", $"Expense {number}", le.Value.FunctionalCurrency, 1m, lines.Lines), cancellationToken);
+            expense.Id, "post", $"Expense {number}", expense.Currency, expense.ExchangeRate, lines.Lines), cancellationToken);
         if (posted.IsFailure)
         {
             return posted.Error;
@@ -915,7 +1010,7 @@ public sealed class CreateReconciliationValidator : AbstractValidator<CreateReco
     }
 }
 
-public sealed class CreateReconciliationHandler(IFinanceDbContext db) : ICommandHandler<CreateReconciliationCommand, ReconciliationDto>
+public sealed class CreateReconciliationHandler(IFinanceDbContext db, GlMovementSync glSync) : ICommandHandler<CreateReconciliationCommand, ReconciliationDto>
 {
     public async Task<Result<ReconciliationDto>> Handle(CreateReconciliationCommand command, CancellationToken cancellationToken)
     {
@@ -925,6 +1020,8 @@ public sealed class CreateReconciliationHandler(IFinanceDbContext db) : ICommand
             return FinanceAppErrors.AccountNotFound;
         }
 
+        // Bring in GL lines posted to the bank account outside Finance (manual journals, other modules) so they can be matched.
+        await glSync.SyncAsync(account, command.StatementDate.AddDays(3), cancellationToken);
         var reconciliation = BankReconciliation.Create(account.CompanyId, account.Id, command.StatementDate, command.StatementBalance,
             command.Lines.Select(l => new BankStatementLine(l.Date, l.Amount, l.Description, l.Reference)));
         var candidates = await ReconciliationQueries.CandidatesAsync(db, account.Id, command.StatementDate, cancellationToken);

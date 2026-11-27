@@ -134,6 +134,36 @@ public static class FinancePermissions
     public const string ExpensePost = "finance.expense.post";
     public const string ReconciliationManage = "finance.reconciliation.manage";
     public const string RevaluationRun = "finance.revaluation.run";
+    public const string ReceiptReverse = "finance.receipt.reverse";
+    public const string PaymentReverse = "finance.payment.reverse";
+    public const string WithholdingCertificateManage = "finance.withholding-certificate.manage";
+}
+
+/// <summary>
+/// A posted receipt or payment with tax withheld. Receipts: a customer withheld tax from us (receivable); payments: we withheld from a supplier
+/// (payable). Amounts in the document currency, <c>…Base</c> in the functional currency. Reversed documents are not returned.
+/// </summary>
+public sealed record WithholdingFact(
+    string Direction,
+    Guid SettlementId,
+    string Number,
+    DateOnly Date,
+    Guid LegalEntityId,
+    PartyKind PartyType,
+    Guid PartyId,
+    Guid? TaxGroupId,
+    string Currency,
+    decimal TaxableAmount,
+    decimal WithheldAmount,
+    decimal TaxableBase,
+    decimal WithheldBase,
+    string? CertificateNumber);
+
+/// <summary>Withholding tax data for the tax reports (Reporting module).</summary>
+public interface IWithholdingReportQueries
+{
+    Task<IReadOnlyList<WithholdingFact>> GetWithholdingFactsAsync(DateOnly from, DateOnly to, PartyKind? partyType = null, Guid? partyId = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>A cash drawer/safe or bank account as other modules need it (e.g. POS terminals post to their cash account).</summary>

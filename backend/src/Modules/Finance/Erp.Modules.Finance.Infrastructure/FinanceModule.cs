@@ -27,6 +27,13 @@ public sealed record MatchRequest(Guid? MovementId);
 
 public sealed record RevaluationRequest(Guid LegalEntityId, DateOnly AsOf);
 
+public sealed record ReversalRequest(DateOnly Date, string Reason);
+
+public sealed record GlSyncRequest(DateOnly? UpTo);
+
+public sealed record WithholdingCertificateRequest(Guid LegalEntityId, string Kind, Guid PartyId, DateOnly PeriodFrom, DateOnly PeriodTo, DateOnly? IssueDate,
+    string? ExternalReference, string? Notes);
+
 public sealed class FinanceModule : IErpModule
 {
     public ModuleManifest Manifest { get; } = new(
@@ -50,6 +57,9 @@ public sealed class FinanceModule : IErpModule
             new(FinancePermissions.ReconciliationManage, "finance", "Reconcile bank statements", "تسوية كشوف البنوك"),
             new(FinancePermissions.RevaluationRun, "finance", "Run foreign-currency revaluation", "تشغيل إعادة تقييم العملات", IsSensitive: true),
             new(FinanceOpeningPermissions.OpeningBalanceManage, "finance", "Create opening receivables and payables (posts journals)", "إنشاء أرصدة افتتاحية للعملاء والموردين (يرحّل قيوداً)", IsSensitive: true),
+            new(FinancePermissions.ReceiptReverse, "finance", "Reverse posted customer receipts", "عكس سندات القبض المرحلة", IsSensitive: true),
+            new(FinancePermissions.PaymentReverse, "finance", "Reverse posted supplier payments", "عكس سندات الصرف المرحلة", IsSensitive: true),
+            new(FinancePermissions.WithholdingCertificateManage, "finance", "Issue and cancel withholding tax certificates", "إصدار وإلغاء شهادات الخصم من المنبع"),
         ],
         Menu:
         [
@@ -73,6 +83,8 @@ public sealed class FinanceModule : IErpModule
         services.AddScoped<IFinanceImportService, FinanceImportService>();
         services.AddScoped<ICashBankAccountQueries, CashBankAccountQueries>();
         services.AddScoped<IFinanceDocumentQueries, FinanceDocumentQueries>();
+        services.AddScoped<IWithholdingReportQueries, WithholdingReportQueries>();
+        services.AddScoped<GlMovementSync>();
         services.AddHandlersFromAssembly(typeof(IFinanceDbContext).Assembly);
         services.AddSingleton(new EventAssembly(typeof(OpenItem).Assembly));
         services.AddSingleton(new EventAssembly(typeof(InvoiceSettled).Assembly));
@@ -98,8 +110,26 @@ public sealed class FinanceModule : IErpModule
             .RequirePermission(FinancePermissions.Read);
 
         // ---- Receipts & payments ----
-        MapSettlements(g, "receipts", SettlementDirection.Receipt, FinancePermissions.ReceiptManage, FinancePermissions.ReceiptPost);
-        MapSettlements(g, "payments", SettlementDirection.Payment, FinancePermissions.PaymentManage, FinancePermissions.PaymentPost);
+        MapSettlements(g, "receipts", SettlementDirection.Receipt, FinancePermissions.ReceiptManage, FinancePermissions.ReceiptPost, FinancePermissions.ReceiptReverse);
+        MapSettlements(g, "payments", SettlementDirection.Payment, FinancePermissions.PaymentManage, FinancePermissions.PaymentPost, FinancePermissions.PaymentReverse);
+
+        // ---- Withholding tax certificates ----
+        g.MapGet("/withholding-certificates", async (string? kind, Guid? partyId, int? page, int? pageSize, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ListWithholdingCertificatesQuery(kind, partyId, new PageRequest(page ?? 1, pageSize ?? 50)), ct)).ToHttpResult())
+            .RequirePermission(FinancePermissions.Read);
+        g.MapGet("/withholding-certificates/{id:guid}", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new GetWithholdingCertificateQuery(id), ct)).ToHttpResult())
+            .RequirePermission(FinancePermissions.Read);
+        g.MapPost("/withholding-certificates", async (WithholdingCertificateRequest b, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new CreateWithholdingCertificateCommand(b.LegalEntityId, b.Kind, b.PartyId, b.PeriodFrom, b.PeriodTo, b.IssueDate, b.ExternalReference, b.Notes), ct))
+                .ToHttpResult(r => Results.Created($"/api/v1/finance/withholding-certificates/{r.Id}", r)))
+            .RequirePermission(FinancePermissions.WithholdingCertificateManage).RequireIdempotency();
+        g.MapPost("/withholding-certificates/{id:guid}/cancel", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new CancelWithholdingCertificateCommand(id), ct)).ToHttpResult())
+            .RequirePermission(FinancePermissions.WithholdingCertificateManage);
+        g.MapPost("/cash-bank-accounts/{id:guid}/sync-gl", async (Guid id, GlSyncRequest? b, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new SyncGlMovementsCommand(id, b?.UpTo), ct)).ToHttpResult(n => Results.Ok(new { imported = n })))
+            .RequirePermission(FinancePermissions.ReconciliationManage);
 
         // ---- Open items & reports ----
         g.MapGet("/open-items", async (string? partyType, Guid? partyId, Guid? legalEntityId, bool? openOnly, int? page, int? pageSize, IDispatcher d, CancellationToken ct) =>
@@ -152,6 +182,9 @@ public sealed class FinanceModule : IErpModule
         g.MapPost("/bank-reconciliations/{id:guid}/complete", async (Guid id, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new CompleteReconciliationCommand(id), ct)).ToHttpResult())
             .RequirePermission(FinancePermissions.ReconciliationManage);
+        g.MapPost("/bank-reconciliations/{id:guid}/reopen", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ReopenReconciliationCommand(id), ct)).ToHttpResult())
+            .RequirePermission(FinancePermissions.ReconciliationManage);
 
         // ---- FX revaluation ----
         g.MapGet("/fx-revaluations", async (Guid? legalEntityId, IDispatcher d, CancellationToken ct) => (await d.Send(new ListRevaluationsQuery(legalEntityId), ct)).ToHttpResult())
@@ -161,8 +194,11 @@ public sealed class FinanceModule : IErpModule
             .RequirePermission(FinancePermissions.RevaluationRun).RequireIdempotency();
     }
 
-    private static void MapSettlements(RouteGroupBuilder g, string path, SettlementDirection direction, string manage, string post)
+    private static void MapSettlements(RouteGroupBuilder g, string path, SettlementDirection direction, string manage, string post, string reverse)
     {
+        g.MapPost($"/{path}/{{id:guid}}/reverse", async (Guid id, ReversalRequest b, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ReverseSettlementCommand(direction, id, b.Date, b.Reason), ct)).ToHttpResult())
+            .RequirePermission(reverse).RequireIdempotency();
         g.MapGet($"/{path}", async (Guid? partyId, string? status, int? page, int? pageSize, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new ListSettlementsQuery(direction, partyId, status, new PageRequest(page ?? 1, pageSize ?? 50)), ct)).ToHttpResult())
             .RequirePermission(FinancePermissions.Read);

@@ -103,11 +103,16 @@ public static class FinancialStatementBuilder
             Section(key, en, ar, balanceSheet.Where(filter), -1, changes, null, null);
 
         var operating = Activities("operating", "Operating activities (adjustments to net profit)", "الأنشطة التشغيلية (تسويات صافي الربح)",
-            a => a.CashFlow is CashFlowCategory.Operating or CashFlowCategory.None);
+            a => a.CashFlow == CashFlowCategory.Operating);
         var investing = Activities("investing", "Investing activities", "الأنشطة الاستثمارية", a => a.CashFlow == CashFlowCategory.Investing);
         var financing = Activities("financing", "Financing activities", "الأنشطة التمويلية", a => a.CashFlow == CashFlowCategory.Financing);
+
+        // Unclassified balance-sheet accounts are counted with operating activities (so the statement ties) but listed separately for review.
+        var unclassified = Activities("unclassified", "Unclassified movements (counted as operating — set a cash-flow category)",
+            "حركات غير مصنفة (محسوبة ضمن التشغيلية — حدد فئة التدفق النقدي)", a => a.CashFlow == CashFlowCategory.None);
         var cashChange = balanceSheet.Where(a => a.CashFlow == CashFlowCategory.Cash).Sum(a => changes.GetValueOrDefault(a.Id));
-        return ([operating, investing, financing], netProfit + operating.Total, investing.Total, financing.Total, cashChange);
+        IReadOnlyList<StatementSectionDto> sections = unclassified.Lines.Count == 0 ? [operating, investing, financing] : [operating, unclassified, investing, financing];
+        return (sections, netProfit + operating.Total + unclassified.Total, investing.Total, financing.Total, cashChange);
     }
 
     public static bool IsBalanceSheet(AccountType type) => type is AccountType.Asset or AccountType.Liability or AccountType.Equity;
@@ -139,16 +144,27 @@ public static class FinancialStatementBuilder
 /// <summary>Loads ledger amounts for the statements. Everything comes from posted journal lines (Part 12.9), in functional currency.</summary>
 public sealed class FinancialStatementService(IAccountingDbContext db, LedgerQueries ledger)
 {
+    /// <summary>
+    /// Posting accounts with their stored income-statement group. Accounts without a group (created before groups existed) fall
+    /// back to the posting-rule classification.
+    /// </summary>
     public async Task<IReadOnlyList<StatementAccount>> AccountsAsync(Guid legalEntityId, CancellationToken ct)
     {
-        var rules = await db.PostingRules.AsNoTracking()
-            .Where(r => r.LegalEntityId == null || r.LegalEntityId == legalEntityId)
-            .Select(r => new { r.Role, r.AccountId })
-            .ToListAsync(ct);
-        var revenue = rules.Where(r => FinancialStatementBuilder.OperatingRevenueRoles.Contains(r.Role)).Select(r => r.AccountId).ToHashSet();
-        var cost = rules.Where(r => FinancialStatementBuilder.CostOfSalesRoles.Contains(r.Role)).Select(r => r.AccountId).ToHashSet();
         var accounts = await db.Accounts.AsNoTracking().Where(a => a.IsPostingAccount).ToListAsync(ct);
-        return accounts.Select(a => new StatementAccount(a.Id, a.Code, a.NameEn, a.NameAr, a.Type, a.CashFlowCategory, revenue.Contains(a.Id), cost.Contains(a.Id)))
+        HashSet<Guid> revenue = [], cost = [];
+        if (accounts.Any(a => !a.IsBalanceSheet && a.ReportGroup == IncomeStatementGroup.None))
+        {
+            var rules = await db.PostingRules.AsNoTracking()
+                .Where(r => r.LegalEntityId == null || r.LegalEntityId == legalEntityId)
+                .Select(r => new { r.Role, r.AccountId })
+                .ToListAsync(ct);
+            revenue = rules.Where(r => FinancialStatementBuilder.OperatingRevenueRoles.Contains(r.Role)).Select(r => r.AccountId).ToHashSet();
+            cost = rules.Where(r => FinancialStatementBuilder.CostOfSalesRoles.Contains(r.Role)).Select(r => r.AccountId).ToHashSet();
+        }
+
+        return accounts.Select(a => new StatementAccount(a.Id, a.Code, a.NameEn, a.NameAr, a.Type, a.CashFlowCategory,
+                a.ReportGroup == IncomeStatementGroup.None ? revenue.Contains(a.Id) : a.ReportGroup == IncomeStatementGroup.Revenue,
+                a.ReportGroup == IncomeStatementGroup.None ? cost.Contains(a.Id) : a.ReportGroup == IncomeStatementGroup.CostOfSales))
             .ToList();
     }
 

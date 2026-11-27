@@ -35,6 +35,7 @@ public sealed class DocumentPrinting(
         ["purchase-order"] = new("procurement", (sp, id, ct) => sp.GetService<IProcurementReportQueries>()?.GetPurchaseOrderPrintAsync(id, ct)),
         ["goods-receipt"] = new("procurement", (sp, id, ct) => sp.GetService<IProcurementReportQueries>()?.GetGoodsReceiptPrintAsync(id, ct)),
         ["voucher"] = new("finance", (sp, id, ct) => sp.GetService<IFinanceDocumentQueries>()?.GetSettlementPrintAsync(id, ct)),
+        ["withholding-certificate"] = new("finance", (sp, id, ct) => sp.GetService<IFinanceDocumentQueries>()?.GetWithholdingCertificatePrintAsync(id, ct)),
     };
 
     public static IReadOnlyCollection<string> DocumentTypes => Sources.Keys;

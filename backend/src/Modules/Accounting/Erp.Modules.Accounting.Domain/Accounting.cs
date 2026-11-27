@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Erp.Modules.Accounting.Contracts;
 using Erp.SharedKernel.Domain;
 using Erp.SharedKernel.Results;
 
@@ -87,6 +88,22 @@ public enum CashFlowCategory
     Cash = 4,
 }
 
+/// <summary>Where a revenue or expense account appears in the income statement. Balance-sheet accounts use <see cref="None"/>.</summary>
+public enum IncomeStatementGroup
+{
+    None = 0,
+
+    /// <summary>Net revenue (sales, services, returns and discounts).</summary>
+    Revenue = 1,
+
+    /// <summary>Cost of sales, above gross profit.</summary>
+    CostOfSales = 2,
+
+    OtherIncome = 3,
+
+    OperatingExpenses = 4,
+}
+
 public enum AccountStatus
 {
     Active = 1,
@@ -131,6 +148,7 @@ public sealed class Account : AggregateRoot, ICompanyScoped
         ControlSubledger = controlSubledger;
         AllowManualPosting = allowManualPosting && controlSubledger == ControlSubledger.None && isPostingAccount;
         Status = AccountStatus.Active;
+        ReportGroup = DefaultReportGroup(type);
     }
 
     public Guid CompanyId { get; private set; }
@@ -157,6 +175,9 @@ public sealed class Account : AggregateRoot, ICompanyScoped
     public AccountStatus Status { get; private set; }
 
     public CashFlowCategory CashFlowCategory { get; private set; }
+
+    /// <summary>Income-statement section of a revenue/expense account, stored on the account so statements do not depend on the current posting rules.</summary>
+    public IncomeStatementGroup ReportGroup { get; private set; }
 
     /// <summary>Balance-sheet accounts carry forward across fiscal years; revenue and expense accounts are closed to retained earnings.</summary>
     public bool IsBalanceSheet => Type is AccountType.Asset or AccountType.Liability or AccountType.Equity;
@@ -198,6 +219,30 @@ public sealed class Account : AggregateRoot, ICompanyScoped
         }
 
         CashFlowCategory = category;
+    }
+
+    public static IncomeStatementGroup DefaultReportGroup(AccountType type) => type switch
+    {
+        AccountType.Revenue => IncomeStatementGroup.Revenue,
+        AccountType.Expense => IncomeStatementGroup.OperatingExpenses,
+        _ => IncomeStatementGroup.None,
+    };
+
+    public void SetReportGroup(IncomeStatementGroup group)
+    {
+        var valid = Type switch
+        {
+            AccountType.Revenue => group is IncomeStatementGroup.Revenue or IncomeStatementGroup.OtherIncome,
+            AccountType.Expense => group is IncomeStatementGroup.CostOfSales or IncomeStatementGroup.OperatingExpenses,
+            _ => group == IncomeStatementGroup.None,
+        };
+        if (!valid)
+        {
+            throw new DomainException(Error.Validation("accounting.report-group-invalid",
+                "Revenue accounts use Revenue or OtherIncome, expense accounts CostOfSales or OperatingExpenses; balance-sheet accounts have no income-statement group."));
+        }
+
+        ReportGroup = group;
     }
 
     public void Deactivate() => Status = AccountStatus.Inactive;
@@ -571,7 +616,8 @@ public sealed class JournalEntry : AggregateRoot, ICompanyScoped
 
     public static decimal ToBase(decimal amount, decimal rate) => Math.Round(amount * rate, 2, MidpointRounding.AwayFromZero);
 
-    public void AddLine(Guid accountId, decimal debit, decimal credit, Guid? costCenterId = null, string? partyType = null, Guid? partyId = null, string? description = null, decimal? baseAmount = null)
+    public void AddLine(Guid accountId, decimal debit, decimal credit, Guid? costCenterId = null, string? partyType = null, Guid? partyId = null, string? description = null, decimal? baseAmount = null,
+        string? postingRole = null, Guid? taxCodeId = null, decimal? taxableAmount = null)
     {
         EnsureDraft();
         if (debit < 0 || credit < 0 || (debit > 0) == (credit > 0))
@@ -588,8 +634,28 @@ public sealed class JournalEntry : AggregateRoot, ICompanyScoped
         var fixedBase = baseAmount is null ? (decimal?)null : Math.Round(baseAmount.Value, 2, MidpointRounding.AwayFromZero);
         var baseDebit = debit > 0 ? fixedBase ?? ToBase(debit, ExchangeRate) : 0m;
         var baseCredit = credit > 0 ? fixedBase ?? ToBase(credit, ExchangeRate) : 0m;
+        var taxableBase = taxableAmount is null ? (decimal?)null : ToBase(taxableAmount.Value, ExchangeRate);
         _lines.Add(new JournalLine(SequentialGuid.New(), Id, _lines.Count + 1, accountId, debit, credit,
-            baseDebit, baseCredit, costCenterId, partyType, partyId, description));
+            baseDebit, baseCredit, costCenterId, partyType, partyId, description, postingRole, taxCodeId, taxableBase));
+    }
+
+    /// <summary>
+    /// Adds a functional-currency-only line (no transaction-currency amount), e.g. a realized exchange difference on a
+    /// foreign-currency settlement. Exactly one of the base amounts must be positive.
+    /// </summary>
+    public void AddBaseOnlyLine(Guid accountId, decimal baseDebit, decimal baseCredit, Guid? costCenterId = null, string? partyType = null, Guid? partyId = null,
+        string? description = null, string? postingRole = null)
+    {
+        EnsureDraft();
+        baseDebit = Math.Round(baseDebit, 2, MidpointRounding.AwayFromZero);
+        baseCredit = Math.Round(baseCredit, 2, MidpointRounding.AwayFromZero);
+        if (baseDebit < 0 || baseCredit < 0 || (baseDebit > 0) == (baseCredit > 0))
+        {
+            throw new DomainException(AccountingErrors.LineOneSided);
+        }
+
+        _lines.Add(new JournalLine(SequentialGuid.New(), Id, _lines.Count + 1, accountId, 0m, 0m,
+            baseDebit, baseCredit, costCenterId, partyType, partyId, description, postingRole));
     }
 
     public void ClearLines()
@@ -658,7 +724,7 @@ public sealed class JournalEntry : AggregateRoot, ICompanyScoped
         PostedBy = postedBy;
         PostedAtUtc = nowUtc;
         Status = JournalStatus.Posted;
-        Raise(new JournalPosted(Id, LegalEntityId, Number, SourceModule, SourceDocType, SourceDocId, Purpose, TotalBaseDebit));
+        Raise(new JournalPosted(Id, LegalEntityId, Number, SourceModule, SourceDocType, SourceDocId, Purpose, TotalBaseDebit, CompanyId, JournalDate));
     }
 
     /// <summary>Creates the draft reversal: every line with debit and credit swapped, same source document.</summary>
@@ -679,7 +745,8 @@ public sealed class JournalEntry : AggregateRoot, ICompanyScoped
         foreach (var line in Lines)
         {
             reversal._lines.Add(new JournalLine(SequentialGuid.New(), reversal.Id, line.LineNo, line.AccountId, line.Credit, line.Debit,
-                line.BaseCredit, line.BaseDebit, line.CostCenterId, line.PartyType, line.PartyId, line.Description));
+                line.BaseCredit, line.BaseDebit, line.CostCenterId, line.PartyType, line.PartyId, line.Description,
+                line.PostingRole, line.TaxCodeId, line.TaxableBase));
         }
 
         return reversal;
@@ -712,9 +779,13 @@ public sealed class JournalLine : ITenantScoped
     }
 
     internal JournalLine(Guid id, Guid journalEntryId, int lineNo, Guid accountId, decimal debit, decimal credit, decimal baseDebit,
-        decimal baseCredit, Guid? costCenterId, string? partyType, Guid? partyId, string? description)
+        decimal baseCredit, Guid? costCenterId, string? partyType, Guid? partyId, string? description,
+        string? postingRole = null, Guid? taxCodeId = null, decimal? taxableBase = null)
     {
         Id = id;
+        PostingRole = postingRole is { Length: > 60 } ? postingRole[..60] : postingRole;
+        TaxCodeId = taxCodeId;
+        TaxableBase = taxableBase;
         JournalEntryId = journalEntryId;
         LineNo = lineNo;
         AccountId = accountId;
@@ -753,6 +824,15 @@ public sealed class JournalLine : ITenantScoped
     public Guid? PartyId { get; private set; }
 
     public string? Description { get; private set; }
+
+    /// <summary>The posting role the line was resolved from (null for lines posted to an explicit account).</summary>
+    public string? PostingRole { get; private set; }
+
+    /// <summary>Tax code of a tax line (from the posting context), used by the VAT return.</summary>
+    public Guid? TaxCodeId { get; private set; }
+
+    /// <summary>Functional-currency taxable amount behind a tax line when the posting module supplied it (positive; it follows the side of the line).</summary>
+    public decimal? TaxableBase { get; private set; }
 }
 
 /// <summary>
@@ -865,8 +945,6 @@ public sealed class AccountBalance : ICompanyScoped
 
     public decimal TxCredit { get; set; }
 }
-
-public sealed record JournalPosted(Guid JournalId, Guid LegalEntityId, string Number, string SourceModule, string SourceDocType, Guid SourceDocId, string Purpose, decimal TotalBaseDebit) : IDomainEvent;
 
 public sealed record FiscalYearClosed(Guid FiscalYearId, Guid LegalEntityId, Guid? ClosingJournalId) : IDomainEvent;
 

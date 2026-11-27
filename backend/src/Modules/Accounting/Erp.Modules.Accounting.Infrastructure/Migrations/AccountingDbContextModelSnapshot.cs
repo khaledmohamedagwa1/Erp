@@ -121,6 +121,11 @@ namespace Erp.Modules.Accounting.Infrastructure.Migrations
                     b.Property<Guid?>("ParentId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("ReportGroup")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
                         .ValueGeneratedOnAddOrUpdate()
@@ -592,6 +597,17 @@ namespace Erp.Modules.Accounting.Infrastructure.Migrations
                     b.Property<string>("PartyType")
                         .HasMaxLength(30)
                         .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("PostingRole")
+                        .HasMaxLength(60)
+                        .HasColumnType("nvarchar(60)");
+
+                    b.Property<Guid?>("TaxCodeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("TaxableBase")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uniqueidentifier");

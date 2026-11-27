@@ -731,7 +731,7 @@ public sealed class PartyQueries(IPartiesDbContext db, ITenantContext tenant, IO
     public async Task<CustomerInfo?> GetCustomerAsync(Guid customerId, CancellationToken cancellationToken = default) =>
         await db.Customers.AsNoTracking().Where(c => c.Id == customerId)
             .Select(c => new CustomerInfo(c.Id, c.Code, c.NameEn, c.NameAr, c.Currency, c.PriceListId, c.PaymentTermsId, c.PostingGroup,
-                c.CreditLimit, c.CreditAction.ToString(), c.OnHold, c.IsActive, c.IsWalkIn))
+                c.CreditLimit, c.CreditAction.ToString(), c.OnHold, c.IsActive, c.IsWalkIn, c.TaxRegistrationNo))
             .FirstOrDefaultAsync(cancellationToken);
 
     public async Task<SupplierInfo?> GetSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default) =>

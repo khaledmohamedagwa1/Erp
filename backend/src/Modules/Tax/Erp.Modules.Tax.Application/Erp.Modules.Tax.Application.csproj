@@ -3,6 +3,10 @@
     <ProjectReference Include="../Erp.Modules.Tax.Domain/Erp.Modules.Tax.Domain.csproj" />
     <ProjectReference Include="../Erp.Modules.Tax.Contracts/Erp.Modules.Tax.Contracts.csproj" />
     <ProjectReference Include="../../../BuildingBlocks/Erp.Application/Erp.Application.csproj" />
+    <ProjectReference Include="../../Accounting/Erp.Modules.Accounting.Contracts/Erp.Modules.Accounting.Contracts.csproj" />
+    <ProjectReference Include="../../Organization/Erp.Modules.Organization.Contracts/Erp.Modules.Organization.Contracts.csproj" />
+    <ProjectReference Include="../../Parties/Erp.Modules.Parties.Contracts/Erp.Modules.Parties.Contracts.csproj" />
+    <ProjectReference Include="../../Sales/Erp.Modules.Sales.Contracts/Erp.Modules.Sales.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" />

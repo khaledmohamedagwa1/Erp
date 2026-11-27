@@ -73,6 +73,7 @@ public sealed class ReportingModule : IErpModule
             new(ReportingPermissions.PurchasingRead, Code, "Run purchasing reports", "تشغيل تقارير المشتريات"),
             new(ReportingPermissions.InventoryRead, Code, "Run inventory reports (including stock values)", "تشغيل تقارير المخزون (بما فيها قيم المخزون)"),
             new(ReportingPermissions.ManufacturingRead, Code, "Run manufacturing reports", "تشغيل تقارير التصنيع"),
+            new(ReportingPermissions.TaxRead, Code, "Run tax reports (VAT return, withholding)", "تشغيل تقارير الضرائب (إقرار القيمة المضافة والخصم من المنبع)"),
             new(ReportingPermissions.DocumentPrint, Code, "Print posted documents (invoices, credit notes, orders, receipts, vouchers)", "طباعة المستندات المرحلة"),
             new(ReportingPermissions.ViewManage, Code, "Save and delete personal report views", "حفظ وحذف طرق العرض الشخصية للتقارير"),
         ],
@@ -82,6 +83,7 @@ public sealed class ReportingModule : IErpModule
             new("reporting.purchasing", "Purchasing reports", "تقارير المشتريات", "/reports/purchasing", "reports", 20, ReportingPermissions.PurchasingRead),
             new("reporting.inventory", "Inventory reports", "تقارير المخزون", "/reports/inventory", "reports", 30, ReportingPermissions.InventoryRead),
             new("reporting.manufacturing", "Manufacturing reports", "تقارير التصنيع", "/reports/manufacturing", "reports", 40, ReportingPermissions.ManufacturingRead),
+            new("reporting.tax", "Tax reports", "تقارير الضرائب", "/reports/tax", "reports", 50, ReportingPermissions.TaxRead),
         ]);
 
     public void AddServices(IServiceCollection services, IConfiguration configuration)
@@ -97,6 +99,7 @@ public sealed class ReportingModule : IErpModule
         services.AddScoped<IReportArea, InventoryReports>();
         services.AddScoped<IReportArea, ManufacturingReports>();
         services.AddScoped<IReportArea, FinancialReports>();
+        services.AddScoped<IReportArea, TaxReports>();
         services.AddScoped<ReportService>();
         services.AddScoped<DocumentPrinting>();
         services.AddHandlersFromAssembly(typeof(IReportingDbContext).Assembly);

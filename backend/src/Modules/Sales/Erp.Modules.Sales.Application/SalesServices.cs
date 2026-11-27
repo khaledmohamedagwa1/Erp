@@ -403,14 +403,16 @@ public sealed class SalesJournal
 
     public IReadOnlyList<JournalLineRequest> Lines => _lines;
 
-    public SalesJournal Add(string role, decimal debit, decimal credit, PostingContext? context = null, Guid? customerId = null, string? description = null)
+    public SalesJournal Add(string role, decimal debit, decimal credit, PostingContext? context = null, Guid? customerId = null, string? description = null,
+        decimal? taxableAmount = null)
     {
         if (debit == 0 && credit == 0)
         {
             return this;
         }
 
-        _lines.Add(new JournalLineRequest(role, null, debit, credit, context, null, customerId is null ? null : "Customer", customerId, description));
+        _lines.Add(new JournalLineRequest(role, null, debit, credit, context, null, customerId is null ? null : "Customer", customerId, description,
+            TaxableAmount: taxableAmount));
         return this;
     }
 
@@ -427,7 +429,8 @@ public sealed class SalesJournal
         foreach (var tax in materialized.SelectMany(l => l.Taxes).GroupBy(t => t.TaxCodeId))
         {
             var amount = tax.Sum(t => t.Amount);
-            Add(PostingRoles.OutputTax, credit ? 0 : amount, credit ? amount : 0, new PostingContext(TaxCodeId: tax.Key), description: tax.First().Code);
+            Add(PostingRoles.OutputTax, credit ? 0 : amount, credit ? amount : 0, new PostingContext(TaxCodeId: tax.Key), description: tax.First().Code,
+                taxableAmount: tax.Sum(t => t.Base));
         }
 
         return this;

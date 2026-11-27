@@ -6,6 +6,7 @@ public static class ReportingPermissions
     public const string PurchasingRead = "reporting.purchasing.read";
     public const string InventoryRead = "reporting.inventory.read";
     public const string ManufacturingRead = "reporting.manufacturing.read";
+    public const string TaxRead = "reporting.tax.read";
     public const string DocumentPrint = "reporting.document.print";
     public const string ViewManage = "reporting.view.manage";
 }
@@ -18,4 +19,5 @@ public static class ReportAreas
     public const string Inventory = "inventory";
     public const string Manufacturing = "manufacturing";
     public const string Financial = "financial";
+    public const string Tax = "tax";
 }
