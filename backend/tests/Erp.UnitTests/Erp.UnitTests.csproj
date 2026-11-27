@@ -11,6 +11,8 @@
     <ProjectReference Include="../../src/Modules/Identity/Erp.Modules.Identity.Application/Erp.Modules.Identity.Application.csproj" />
     <ProjectReference Include="../../src/Modules/Configuration/Erp.Modules.Configuration.Application/Erp.Modules.Configuration.Application.csproj" />
     <ProjectReference Include="../../src/BuildingBlocks/Erp.Infrastructure/Erp.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/Modules/Accounting/Erp.Modules.Accounting.Domain/Erp.Modules.Accounting.Domain.csproj" />
+    <ProjectReference Include="../../src/Modules/Accounting/Erp.Modules.Accounting.Application/Erp.Modules.Accounting.Application.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

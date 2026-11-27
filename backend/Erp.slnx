@@ -11,6 +11,12 @@
     <Project Path="src/Host/Erp.Migrator/Erp.Migrator.csproj" />
   </Folder>
   <Folder Name="/src/Modules/" />
+  <Folder Name="/src/Modules/Accounting/">
+    <Project Path="src/Modules/Accounting/Erp.Modules.Accounting.Application/Erp.Modules.Accounting.Application.csproj" />
+    <Project Path="src/Modules/Accounting/Erp.Modules.Accounting.Contracts/Erp.Modules.Accounting.Contracts.csproj" />
+    <Project Path="src/Modules/Accounting/Erp.Modules.Accounting.Domain/Erp.Modules.Accounting.Domain.csproj" />
+    <Project Path="src/Modules/Accounting/Erp.Modules.Accounting.Infrastructure/Erp.Modules.Accounting.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Modules/Configuration/">
     <Project Path="src/Modules/Configuration/Erp.Modules.Configuration.Application/Erp.Modules.Configuration.Application.csproj" />
     <Project Path="src/Modules/Configuration/Erp.Modules.Configuration.Contracts/Erp.Modules.Configuration.Contracts.csproj" />
