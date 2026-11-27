@@ -1,6 +1,6 @@
 # Requirements Traceability Matrix
 
-Backend update (2026-11-27, after waves 1–5): rows marked **Tested** are implemented in `backend/` and covered by automated tests (650 passing). **Partial**, **Deferred** and **Not started** are explained in the row and in KNOWN_LIMITATIONS.md. The Angular frontend has not been started.
+Backend update (2026-11-27, after waves 1–6): rows marked **Tested** are implemented in `backend/` and covered by automated tests (758 passing). **Partial**, **Deferred** and **Not started** are explained in the row and in KNOWN_LIMITATIONS.md. The Angular frontend has not been started.
 
 Status legend: **Designed** = covered by architecture docs, not implemented · **Designed (OQ)** = designed with a recommended default awaiting confirmation · **Deferred** = intentionally later phase/out of v1 · **Implemented** / **Tested** (used from Phase 2 on).
 
@@ -51,7 +51,7 @@ Phase numbers follow [docs/business/04-implementation-roadmap.md](docs/business/
 | R-MD-04 | UOM domain with deterministic conversions | 6.2 | Catalog | P3 | 01-aggregates §5.3 (conversion rule) | Tested |
 | R-MD-05 | Customers: groups, addresses, contacts, credit profile, price list, payment terms, account; individual/business | 6.3 | Parties | P3 | 01-aggregates §5.4 | Tested |
 | R-MD-06 | Suppliers: contacts, addresses, terms, account, price history | 6.4 | Parties | P3 | 01-aggregates §5.4 | Tested |
-| R-MD-07 | Employees, salespersons, departments | 6.5 | Organization | P3 | 01-aggregates §5.2 | Partial (employees/salespersons master data not implemented) |
+| R-MD-07 | Employees, salespersons, departments | 6.5 | Organization | P3 | 01-aggregates §5.2 | Tested (People module: employees, salespersons; `PeopleTests`) |
 | R-MD-08 | Currencies, tax definitions | 2.2, 13 | Tax | P3 | 01-aggregates §5.5 | Tested |
 | R-MD-09 | Data import (opening data) | — (MR-3) | Platform | P3 | 03-open-questions MR-3 | Tested (`ImportTests`; CSV/XLSX with dry run for chart, products, customers, suppliers, opening stock, open AR/AP, GL opening) |
 | **Inventory** |||||||
@@ -71,7 +71,7 @@ Phase numbers follow [docs/business/04-implementation-roadmap.md](docs/business/
 | R-SAL-03 | Delivery notes, partial/multiple deliveries | 8.2 | Sales | P6 | §8.4, OQ-SAL-1 | Tested |
 | R-SAL-04 | Cash & credit sales, customer pricing, price lists, volume & promo discounts | 8.2 | Sales, Catalog | P6 | MR-7 | Partial (price lists with quantity tiers, customer price lists, permissioned line discounts; no promotions engine) |
 | R-SAL-05 | Returns, credit notes, refunds | 8.2 | Sales, Finance | P6/P8 | §8.5, J-8 | Tested |
-| R-SAL-06 | Salesperson commissions | 8.2 | Sales | P6/P10 | OQ-SAL-5 | Deferred (module switch exists) |
+| R-SAL-06 | Salesperson commissions | 8.2 | Sales | P6/P10 | OQ-SAL-5 | Tested (commission plans, monthly runs posted Dr commission expense / Cr payable, clawback; payment of the payable not built) |
 | R-SAL-07 | Atomic invoice posting (inventory, COGS, revenue, tax, AR) | 8.3, 22 | Sales | P6 | 04-accounting-posting §11.2 | Tested |
 | R-SAL-08 | Frontend never determines financial values | 8.3, 25.9 | Sales | P6 | API_CONTRACTS §1 | Tested |
 | R-SAL-09 | Credit limits | 5, 12.5 | Sales, Finance | P6 | MR-8 | Tested |
@@ -86,15 +86,15 @@ Phase numbers follow [docs/business/04-implementation-roadmap.md](docs/business/
 | **POS** |||||||
 | R-POS-01 | Barcode, fast lookup, cart, split/multiple payments, discounts, tax, receipts, refunds, exchanges | 10 | POS | P6 | 05-frontend §16.8–16.9 | Tested |
 | R-POS-02 | Shift open/close, cash drawer, reconciliation, terminal management | 10 | POS | P6 | POS shift lifecycle, J-11 | Tested |
-| R-POS-03 | Offline-ready design (idempotency, sync queue, conflicts, price versioning) | 10 | POS | Future | 07-transaction-consistency §19.9 | Deferred (idempotent resend and price versioning implemented; offline sync designed only) |
+| R-POS-03 | Offline-ready design (idempotency, sync queue, conflicts, price versioning) | 10 | POS | Future | 07-transaction-consistency §19.9 | Tested (server side: terminal number ranges and batch offline sync with per-receipt conflicts; no device application) |
 | **Manufacturing** |||||||
 | R-MFG-01 | BOM with versions, scrap %, yield, alternatives, effective dates, multi-level | 11.1 | Manufacturing | P9 | 01-aggregates §5.10 | Tested (alternative components stored, not auto-substituted) |
 | R-MFG-02 | Work centers, routings, operations, costs | 11.2 | Manufacturing | P9 | 02-database-erd §6.7 | Tested |
 | R-MFG-03 | Production order lifecycle, issues, returns, FG receipt, scrap, rework, variance | 11.3 | Manufacturing | P9 | §10.1–10.2 | Tested (rework not modelled separately) |
 | R-MFG-04 | WIP accounting | 11.4 | Manufacturing, Accounting | P9 | J-9 | Tested (actual costing) |
-| R-MFG-05 | Actual & standard costing extensible | 11.4 | Manufacturing | P9 | OQ-MFG-1 | Partial (actual costing only; standard costing and absorption-variance clearing not implemented) |
+| R-MFG-05 | Actual & standard costing extensible | 11.4 | Manufacturing | P9 | OQ-MFG-1 | Tested (actual or standard costing, cost versions, variance split, absorption clearing; `ManufacturingCostingTests`) |
 | R-MFG-06 | Basic MRP | 11.5 | Manufacturing | P9 | §10.4 | Tested |
-| R-MFG-07 | Finite capacity scheduling | 11.5 | Manufacturing | Future | — | Deferred |
+| R-MFG-07 | Finite capacity scheduling | 11.5 | Manufacturing | Future | — | Partial (capacity load per working day with overload flags and proposed dates; no automatic rescheduling/sequencing) |
 | **Accounting** |||||||
 | R-ACC-01 | COA hierarchy, AR/EN names, control vs posting accounts | 12.2 | Accounting | P7a | 01-aggregates §5.11 | Tested |
 | R-ACC-02 | Journal entries with required header/line fields | 12.3 | Accounting | P7a | 02-database-erd §6.8 | Tested |
@@ -102,7 +102,7 @@ Phase numbers follow [docs/business/04-implementation-roadmap.md](docs/business/
 | R-ACC-04 | Period open/close, period-end adjustments, opening balances | 12.4 | Accounting | P7a/P8 | OQ-ACC-3/4 | Tested |
 | R-ACC-05 | Foreign currency transactions | 12.4, 13 | Accounting, Finance | P8 | J-10, OQ-ACC-5 | Tested |
 | R-ACC-06 | Configurable posting rules; no hardcoded account IDs | 12.8, 25.15 | Accounting | P7a | ADR-011 | Tested |
-| R-ACC-07 | Cost centers, profit centers | 12.1 | Accounting | P7a | 01-aggregates §5.11 | Partial (cost centers implemented; profit centers not) |
+| R-ACC-07 | Cost centers, profit centers | 12.1 | Accounting | P7a | 01-aggregates §5.11 | Tested (cost centers and profit centers with branch mapping and profit-center P&L) |
 | R-ACC-08 | Financial statements from posted entries only | 12.9, 18 | Reporting | P7a/P8 | ADR-016 | Tested |
 | **Finance** |||||||
 | R-FIN-01 | AR: subledger, receipts, credit notes, refunds, advances, allocation (N:M), unallocated, aging, statements | 12.5 | Finance | P8 | 01-aggregates §5.12 | Tested |
@@ -123,7 +123,7 @@ Phase numbers follow [docs/business/04-implementation-roadmap.md](docs/business/
 | **Reporting** |||||||
 | R-RPT-01 | Sales, inventory, purchasing, manufacturing, accounting reports | 18 | Reporting | per phase | API_CONTRACTS §4 | Tested |
 | R-RPT-02 | Filters, Excel/PDF export, print, server-side paging/aggregation | 18 | Reporting | per phase | 05-frontend §16.5 | Tested (CSV/XLSX/HTML; no PDF) |
-| R-RPT-03 | Dashboard builder | 2.2, 18 | Reporting | P10 | — | Deferred |
+| R-RPT-03 | Dashboard builder | 2.2, 18 | Reporting | P10 | — | Tested (dashboards with widgets on report keys, role sharing; scheduled reports; read models) |
 | **Frontend** |||||||
 | R-UI-01 | Angular structure core/shared/layouts/features with pages/components/data-access/models/state/forms | 19 | Frontend | P2 | 05-frontend §16.2 | Not started (frontend) |
 | R-UI-02 | RTL/LTR, light/dark, responsive, keyboard, barcode | 19 | Frontend | P2 | 05-frontend §16.7–16.8 | Not started (frontend) |

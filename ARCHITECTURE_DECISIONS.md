@@ -234,3 +234,21 @@ Format per ADR: Decision · Why · Alternatives considered · Trade-offs · Futu
 
 * **Decision:** `JournalPosted`-style integration events from Sales queue an `EInvoiceSubmission` when the company enables e-invoicing; each document is chained to the previous one by counter and hash (ZATCA-style) under optimistic concurrency; transient failures retry via the outbox, rejections wait for a user retry. `IEInvoicingProvider` adapters are selected by configuration; only a mock adapter is included.
 * **Trade-offs:** Real ETA/ZATCA adapters need tenant credentials and certificates/HSM and are a per-jurisdiction project. This narrows the "e-invoicing out of scope" clause of ADR-028 to "submission adapters out of scope".
+
+## ADR-038 Standard costing inside a perpetual average/FIFO ledger; absorption clearing per cost pool — Accepted 2026-11-27
+
+* **Decision:** Costing method is a company default with a per-product override. Production orders copy the active cost version's standards when planned, receive finished goods at standard, and at close split the residual WIP into price, usage, conversion and other variances that always sum to the residual. Activating a cost version revalues on-hand stock of standard-costed products through `IInventoryRevaluationService` (value-only cost-adjustment movements, idempotent per source and product, step-up required). Purchased stock stays on its inventory method. Absorption clearing compares applied labour/machine/overhead with actual expense accounts grouped in cost pools; one posted run per legal entity and period, difference to `AbsorptionVariance`.
+* **Trade-offs:** ⚖️ Variance and revaluation conventions need accountant confirmation; standards are per product, not per variant.
+
+## ADR-039 Profit centers as a journal-line dimension; People module for employees and commissions — Accepted 2026-11-27
+
+* **Decision:** Profit center is an analysis dimension on journal lines (not part of the balance key), defaulted by the posting engine from `JournalRequest.BranchId` through a branch → profit center mapping; explicit line values win. Module `people` (order 190, always on) holds employees and salespersons; commission features are gated by the optional `commissions` module. Commission runs are monthly per legal entity, read sales through Sales/POS fact contracts, and post one journal (Dr commission expense / Cr commission payable) with the employee as party.
+
+## ADR-040 Inventory recost, return splitting, bins, receipt-date valuation and server-side POS offline — Accepted 2026-11-27
+
+* **Decision:** Recost replays an item in date order and posts value-only corrections (journal first); the automatic mode is an opt-in policy queued through the outbox. Returns are split by the inventory engine across the issue movements of the original line. Bins are an opt-in quantity split beside the warehouse ledger with a reversal log. Purchase receipts are valued at the receipt-date spot rate (policy) and the receipt/invoice rate difference is realised FX at invoice. POS offline selling uses server-reserved number ranges per terminal and a batch sync that posts each receipt in its own transaction with per-receipt results (accepted, replayed, rejected with conflicts).
+
+## ADR-041 Fixed-asset books, IAS 16/36 tracking, scheduled work, read models and dashboards — Accepted 2026-11-27
+
+* **Decision:** Additional depreciation books are reporting-only schedules on the asset; only the posting book posts. Revaluation reserve and write-downs are tracked per asset and posted through posting roles (an explicit reserve account keeps the legacy path). Transfers between legal entities are a disposal at book value plus an acquisition through a clearing account. Scheduled work (depreciation, report schedules) uses per-company settings and a worker that loops over tenants and companies, claiming each run under the row version. Read models (daily sales, stock value snapshots) are recomputed per affected day from module facts on `JournalPosted` and can be rebuilt. Dashboard widgets and schedules run reports with the viewer's/owner's permissions — sharing never widens access. Menu items may declare `RequiredModule` so navigation hides disabled modules.
+* **Workflow:** approval conditions gain one level of OR groups; a step may escalate by reassigning instead of adding approvers.
