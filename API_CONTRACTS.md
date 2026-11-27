@@ -165,8 +165,8 @@ Additional platform endpoints added later: `POST /api/v1/auth/mfa/verify`, MFA e
 
 | Module | Base path | Module code (switchable?) | Endpoints | Reference |
 |---|---|---|---|---|
-| Organization | `/api/v1/organization`, `/api/platform/tenants` | organization (core) | 10 | §6 |
-| Identity | `/api/v1/auth`, `/api/v1/me`, `/api/v1/identity` | identity (core) | 21 | §6, [platform.md](docs/modules/platform.md) |
+| Organization | `/api/v1/organization`, `/api/platform/tenants`, `/api/platform/operators`, `/api/platform/auth` | organization (core) | 15 | §6; tenant provisioning needs a platform-operator token (password + TOTP, audience `erp-platform`); the static key only bootstraps the first operator |
+| Identity | `/api/v1/auth` (incl. `POST step-up`, `GET oidc/providers`, `GET oidc/{key}/start`, `GET oidc/callback`), `/api/v1/me`, `/api/v1/identity` (incl. `identity-providers`) | identity (core) | 28 | §6, [platform.md](docs/modules/platform.md) |
 | Configuration | `/api/v1/configuration` | configuration (core) | 4 | §6 |
 | Catalog & pricing | `/api/v1/catalog` | catalog (core) | 24 | [catalog.md](docs/modules/catalog.md) |
 | Parties | `/api/v1/parties` | parties (core) | 22 | [parties.md](docs/modules/parties.md) |
@@ -180,6 +180,10 @@ Additional platform endpoints added later: `POST /api/v1/auth/mfa/verify`, MFA e
 | Manufacturing | `/api/v1/manufacturing` | manufacturing (optional; needs inventory + procurement) | 31 | [manufacturing.md](docs/modules/manufacturing.md) |
 | Workflow | `/api/v1/workflow` | workflow (core) | 17 | [workflow.md](docs/modules/workflow.md) |
 | Fixed assets | `/api/v1/assets` | fixed-assets (optional) | 20 | [fixed-assets.md](docs/modules/fixed-assets.md) |
-| Reporting | `/api/v1/reports` | reporting (core) | 6 + report keys | [reporting.md](docs/modules/reporting.md) |
+| Reporting | `/api/v1/reports` (incl. `tax/vat-return`, `tax/withholding`; `format=pdf` on reports and printable documents — 501 `reporting.pdf-not-configured` without a PDF engine) | reporting (core) | 6 + report keys | [reporting.md](docs/modules/reporting.md) |
+| Documents | `/api/v1/documents/attachments` (POST multipart, GET `?ownerType&ownerId`, GET `/{id}/content`, DELETE `/{id}`), `/api/v1/notifications` (GET, `unread-count`, POST `/{id}/read`, POST `read-all`) | documents (core) | 8 | [documents.md](docs/modules/documents.md) |
+| Data import | `/api/v1/import` (`types`, `types/{type}/template`, `jobs`, POST `jobs` multipart, POST `jobs/{id}/validate`, POST `jobs/{id}/commit` with Idempotency-Key) | import (core) | 7 | [import.md](docs/modules/import.md) |
+
+Wave-5 additions inside existing modules: Finance `POST /finance/{receipts|payments}/{id}/reverse`, `POST /finance/bank-reconciliations/{id}/reopen`, `POST /finance/cash-bank-accounts/{id}/sync-gl`, `/finance/withholding-certificates` (list, get, create, cancel); Accounting `PUT /accounting/accounts/{id}/report-group`; Tax `GET|PUT /tax/e-invoicing/settings`, `GET /tax/e-invoicing/submissions[/{id}]`, `POST /tax/e-invoicing/submissions/{id}/retry`. New error codes: `identity.step-up-required`, `data-scope.denied`, `platform.bootstrap-closed`, `platform.invalid-credentials`, `auth.external-*`, `auth.invalid-return-url`, `import.commit-failed`, `import.already-committed`.
 
 Optional modules return 404 `module-disabled` when switched off for the active company. Endpoint counts are the number of mapped routes per module at the time of writing.

@@ -1,6 +1,6 @@
 # Requirements Traceability Matrix
 
-Backend update (2026-11-27, after waves 1–4): rows marked **Tested** are implemented in `backend/` and covered by automated tests (522 passing). **Partial**, **Deferred** and **Not started** are explained in the row and in KNOWN_LIMITATIONS.md. The Angular frontend has not been started.
+Backend update (2026-11-27, after waves 1–5): rows marked **Tested** are implemented in `backend/` and covered by automated tests (650 passing). **Partial**, **Deferred** and **Not started** are explained in the row and in KNOWN_LIMITATIONS.md. The Angular frontend has not been started.
 
 Status legend: **Designed** = covered by architecture docs, not implemented · **Designed (OQ)** = designed with a recommended default awaiting confirmation · **Deferred** = intentionally later phase/out of v1 · **Implemented** / **Tested** (used from Phase 2 on).
 
@@ -31,17 +31,17 @@ Phase numbers follow [docs/business/04-implementation-roadmap.md](docs/business/
 | **Identity & security** |||||||
 | R-SEC-01 | ASP.NET Identity, JWT, refresh token rotation | 3, 15 | Identity | P2 | 06-security-model §18.1, ADR-013 | Tested |
 | R-SEC-02 | RBAC + fine-grained permissions | 15 | Identity | P2 | 06-security-model §18.2 | Tested |
-| R-SEC-03 | Branch & warehouse restrictions | 15 | Identity | P2 | 06-security-model §18.2 | Partial (scopes stored per user, not yet applied to data queries) |
+| R-SEC-03 | Branch & warehouse restrictions | 15 | Identity | P2 | 06-security-model §18.2 | Tested (`DataScopeTests`; applied to branch/warehouse documents — ledgers, balances, transfers and master data are not scoped) |
 | R-SEC-04 | Approval & sensitive operation permissions | 15 | Identity, Workflow | P2/P5 | 06-security-model §18.2 | Tested (approval engine + sensitive permissions; step-up MFA re-authentication not implemented) |
 | R-SEC-05 | Audit of financial, inventory, price, accounting-config, permission, posting, cancellation changes | 15 | Audit | P2 | 06-security-model §18.3 | Tested |
 | R-SEC-06 | Tamper-protected audit history | 15 | Audit | P2 | 06-security-model §18.3 | Tested |
 | R-SEC-07 | Secure secrets management, none in source control | 15, 20.3 | Platform | P2 | 06-security-model §18.4, 04-deployment §14.1 | Tested (secret files / env; generated at install) |
 | **Platform services** |||||||
 | R-PLT-01 | Localization AR/EN | 2.2, 19 | Core | P2 | 05-frontend-architecture §16.7 | Tested |
-| R-PLT-02 | Notifications | 2.2 | Core | P2/P10 | 04-deployment §14.2 | Partial (email notifications via outbox and SMTP/log sender; no in-app/real-time channel) |
+| R-PLT-02 | Notifications | 2.2 | Core | P2/P10 | 04-deployment §14.2 | Tested (email via outbox; in-app notifications per user, polled — no push channel) |
 | R-PLT-03 | Concurrency-safe document numbering per tenant/company/LE/branch/doc type/fiscal year | 17 | Documents | P2 | 07-transaction-consistency §19.8, ADR-021 | Tested |
-| R-PLT-04 | File management / attachments | 2.2, 17 | Documents | P2 | 02-database-erd §6.9 | Partial (attachments storage not implemented) |
-| R-PLT-05 | Document templates, PDF, printing | 17 | Documents | P6 | API_CONTRACTS §2 | Partial (printable HTML documents; no PDF engine) |
+| R-PLT-04 | File management / attachments | 2.2, 17 | Documents | P2 | 02-database-erd §6.9 | Tested (`DocumentsTests`; local or S3-compatible storage) |
+| R-PLT-05 | Document templates, PDF, printing | 17 | Documents | P6 | API_CONTRACTS §2 | Tested (printable HTML; PDF via optional Gotenberg service, 501 when not configured) |
 | R-PLT-06 | Document status history & historical snapshots | 17 | Documents | P2 | 03-document-lifecycles | Tested |
 | R-PLT-07 | Logging (Serilog), health checks, OpenTelemetry | 3 | Platform | P2 | 04-deployment | Tested |
 | **Master data** |||||||
@@ -53,7 +53,7 @@ Phase numbers follow [docs/business/04-implementation-roadmap.md](docs/business/
 | R-MD-06 | Suppliers: contacts, addresses, terms, account, price history | 6.4 | Parties | P3 | 01-aggregates §5.4 | Tested |
 | R-MD-07 | Employees, salespersons, departments | 6.5 | Organization | P3 | 01-aggregates §5.2 | Partial (employees/salespersons master data not implemented) |
 | R-MD-08 | Currencies, tax definitions | 2.2, 13 | Tax | P3 | 01-aggregates §5.5 | Tested |
-| R-MD-09 | Data import (opening data) | — (MR-3) | Platform | P3 | 03-open-questions MR-3 | Not started (import framework) |
+| R-MD-09 | Data import (opening data) | — (MR-3) | Platform | P3 | 03-open-questions MR-3 | Tested (`ImportTests`; CSV/XLSX with dry run for chart, products, customers, suppliers, opening stock, open AR/AP, GL opening) |
 | **Inventory** |||||||
 | R-INV-01 | On-hand, reserved, available, incoming, outgoing, in-transit | 7.1 | Inventory | P4 | glossary; OQ-INV-5 | Tested |
 | R-INV-02 | Immutable inventory ledger with required fields | 7.2 | Inventory | P4 | 02-database-erd §6.6, ADR-010 | Tested |
@@ -114,7 +114,7 @@ Phase numbers follow [docs/business/04-implementation-roadmap.md](docs/business/
 | R-TAX-01 | Tax codes, rates, inclusive/exclusive, components, effective dates, exemptions, registrations, input/output, reporting | 13 | Tax | P3/P8 | 01-aggregates §5.5 | Tested |
 | R-TAX-02 | No single-country tax assumptions in core | 13 | Tax | P3 | ADR-011 | Tested |
 | R-TAX-03 | Multi-currency: base/transaction currency, effective rates, realized/unrealized FX | 13 | Tax, Finance | P8 | J-10 | Tested |
-| R-TAX-04 | E-invoicing compliance | — (MR-1) | Compliance | P6+ | MR-1 | Not started (out of scope by decision: no e-invoicing submission) |
+| R-TAX-04 | E-invoicing compliance | — (MR-1) | Compliance | P6+ | MR-1 | Partial (provider port, submission tracking, hash chain and mock adapter tested; real ETA/ZATCA adapters need credentials/certificates and are not included) |
 | **Fixed assets** |||||||
 | R-FA-01 | Register, categories, acquisition, location, assignment, depreciation methods/schedules, transfer, disposal, revaluation, history; GL entries | 14 | FixedAssets | P10 | 01-aggregates §5.13, J-12 | Tested |
 | **Workflow** |||||||

@@ -210,3 +210,27 @@ Format per ADR: Decision · Why · Alternatives considered · Trade-offs · Futu
 
 * **Decision:** The same API image runs as `api`, `worker` or `all`; secrets are read from files (`/run/secrets`, the same mechanism for Docker, Kubernetes and Windows) and generated only at install time; migrations run only as an explicit step (Compose profile, Helm hook disabled by default, `upgrade.sh` with mandatory backup); readiness reports unhealthy while migrations are pending. Production startup refuses weak configuration (missing signing key, insecure cookies, short platform key, implicit CORS).
 * **Why:** Implements Part 20 and ADR-015/025 identically for cloud and on-premises.
+
+## ADR-033 Attachments, in-app notifications and PDF output in a core Documents module — Accepted 2026-11-27
+
+* **Decision:** Module `documents` (migration order 170) owns attachments and per-user notifications. Attachment bytes go through an `IFileStorage` port (local disk by default, S3-compatible optional) under content-addressed per-tenant keys `{tenant}/{aa}/{sha256}`, written idempotently *before* the database command and outside the transaction. Uploads pass an allowlist with content sniffing; the stored content type comes from the extension; downloads are always `Content-Disposition: attachment` with `nosniff`; deletion is soft and audited. Other modules publish notifications through `INotificationPublisher` (Documents.Contracts) inside their own transaction (normally an outbox/inbox handler). PDF is an `IPdfRenderer` port that converts the existing self-contained HTML (ADR-031): Gotenberg adapter (optional external service) or a null default answering 501. Supersedes the "PDF out of scope" clause of ADR-031.
+* **Trade-offs:** PDF needs an extra container; a failed command can leave an unreferenced file (never garbage-collected); attachment read access is not tied to the owner document's permission.
+
+## ADR-034 Data scopes, step-up MFA, federation, platform operators and a distributed cache — Accepted 2026-11-27
+
+* **Decision:** Branch/warehouse data scopes are enforced by EF global query filters plus a save-time check, only on documents that opt in through a marker interface; `identity.scope.all` and background jobs bypass. Step-up is based on the session's last MFA time (10 minutes) and enforced by an endpoint filter on sensitive actions. External OIDC (authorization code + PKCE, per-tenant provider configuration, secrets by reference) links to existing users by verified email and issues normal ERP tokens. Platform operators are a separate identity with their own token audience (`erp-platform`) and mandatory TOTP; the static platform key only bootstraps the first operator. `ErpCache:Provider` selects Memory or Redis for session status, permission invalidation versions (random values, not counters) and the sign-in rate limiter.
+* **Trade-offs:** Ledgers, balances, transfers and master data are not scoped; Redis has only been tested through an in-memory distributed cache.
+
+## ADR-035 Data import runs the owning modules' own commands — Accepted 2026-11-27
+
+* **Decision:** Module `import` (order 180) stores jobs and uploaded files only. Every record is written by the owning module through an import contract that runs its regular command (validation, numbering, posting, audit). A dry run is the real execution inside a transaction that is always rolled back, with a savepoint per row so every bad row is reported; commit re-runs it all-or-nothing in one transaction, idempotent and serialised by writing the job row first.
+* **Trade-offs:** Validating a large opening-stock or GL file briefly holds the same locks as a real posting.
+
+## ADR-036 Sub-ledger journals in transaction currency with fixed base amounts — Accepted 2026-11-27
+
+* **Decision:** Finance journals (receipts, payments, advance allocations, expenses, same-currency transfers) post in the document currency; every line carries a fixed base amount, and realized FX differences are base-only lines. Journal lines also store posting role, tax code and taxable base (used by the VAT return). Cross-currency allocation goes through the base currency at document-date spot rates unless the user gives the amount. Reversals of receipts/payments write negated allocation rows (history preserved) rather than deleting allocations.
+
+## ADR-037 E-invoicing as an outbox-driven provider port — Accepted 2026-11-27
+
+* **Decision:** `JournalPosted`-style integration events from Sales queue an `EInvoiceSubmission` when the company enables e-invoicing; each document is chained to the previous one by counter and hash (ZATCA-style) under optimistic concurrency; transient failures retry via the outbox, rejections wait for a user retry. `IEInvoicingProvider` adapters are selected by configuration; only a mock adapter is included.
+* **Trade-offs:** Real ETA/ZATCA adapters need tenant credentials and certificates/HSM and are a per-jurisdiction project. This narrows the "e-invoicing out of scope" clause of ADR-028 to "submission adapters out of scope".
