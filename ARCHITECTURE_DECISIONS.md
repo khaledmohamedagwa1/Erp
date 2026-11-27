@@ -156,3 +156,29 @@ Format per ADR: Decision · Why · Alternatives considered · Trade-offs · Futu
 ## ADR-023 Minimal APIs with route groups per module; REST resource + action endpoints for transitions — Accepted
 
 * **Why:** Low overhead, endpoint filters for module/permission/idempotency, OpenAPI generation. State transitions as explicit action endpoints (`POST /invoices/{id}/post`) rather than PATCHing status.
+
+---
+
+## ADR-024 Module application layers use EF Core through a module DbContext interface — Accepted (Phase 2)
+
+* **Decision:** Each module's Application project depends on `Microsoft.EntityFrameworkCore` (not the SQL Server provider) and talks to persistence through a narrow interface (`IOrganizationDbContext`, `IIdentityDbContext`, `IConfigurationDbContext`) exposing only that module's `DbSet`s. Domain projects stay free of EF (enforced by architecture tests).
+* **Why:** Removes a repository-per-aggregate layer that would only forward calls, while keeping LINQ projections for queries (CQRS-lite, ADR-016). The interface still stops one module from reaching another module's tables.
+* **Alternatives:** Repository interfaces per aggregate (more code, little extra isolation); handlers in Infrastructure (blurs layers).
+* **Trade-offs:** Application code is coupled to EF Core's query API. Acceptable: EF is the chosen ORM, and swapping it would be a rewrite anyway.
+
+## ADR-025 One host with process roles instead of a separate Worker project — Accepted (Phase 2)
+
+* **Decision:** `Erp.Api` runs as `api`, `worker` or `all` (`Erp:Role`). The outbox dispatcher only runs for `worker`/`all`. `Erp.Migrator` stays a separate executable.
+* **Why:** Same image and code paths everywhere; small on-prem installs run one process. Replaces the separate `Erp.Worker` project in the solution sketch.
+* **Trade-offs:** The worker carries the HTTP stack it does not use (small cost).
+
+## ADR-026 User store: own `User` aggregate with ASP.NET Core Identity's password hasher — Accepted (Phase 2)
+
+* **Decision:** Users, roles, sessions and refresh tokens are domain aggregates in the Identity module. Password hashing uses ASP.NET Core Identity's `PasswordHasher` (PBKDF2, versioned format). The full `UserManager`/`IdentityDbContext` stack is not used.
+* **Why:** Identity's stores assume globally unique user names and its own table layout; we need tenant-scoped uniqueness, row-level security, rotating refresh tokens with reuse detection, and the shared transaction model. This refines ADR-013.
+* **Trade-offs:** MFA (TOTP), password reset and email confirmation must be built by us (scheduled; see KNOWN_LIMITATIONS.md).
+
+## ADR-027 Configuration module schema is `configuration`; `core` holds platform tables — Accepted (Phase 2)
+
+* **Decision:** Module activation and policies live in schema `configuration`. Schema `core` holds platform tables (number sequences); `audit` holds the audit log.
+* **Why:** Each DbContext keeps its own `__EFMigrationsHistory` in its own schema; two contexts sharing `core` would collide.

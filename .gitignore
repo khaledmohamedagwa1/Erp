@@ -1,0 +1,20 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+*.trx
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+# Secrets / local env
+.env
+*.pfx
+appsettings.*.local.json
+# Node / Angular (frontend, later)
+node_modules/
+dist/
+.angular/

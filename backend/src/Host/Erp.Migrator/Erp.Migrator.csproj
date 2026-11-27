@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../BuildingBlocks/Erp.Web/Erp.Web.csproj" />
+    <ProjectReference Include="../../Modules/Organization/Erp.Modules.Organization.Infrastructure/Erp.Modules.Organization.Infrastructure.csproj" />
+    <ProjectReference Include="../../Modules/Identity/Erp.Modules.Identity.Infrastructure/Erp.Modules.Identity.Infrastructure.csproj" />
+    <ProjectReference Include="../../Modules/Configuration/Erp.Modules.Configuration.Infrastructure/Erp.Modules.Configuration.Infrastructure.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" />
+  </ItemGroup>
+</Project>

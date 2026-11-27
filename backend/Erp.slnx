@@ -1,0 +1,37 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/BuildingBlocks/">
+    <Project Path="src/BuildingBlocks/Erp.Application/Erp.Application.csproj" />
+    <Project Path="src/BuildingBlocks/Erp.Infrastructure/Erp.Infrastructure.csproj" />
+    <Project Path="src/BuildingBlocks/Erp.SharedKernel/Erp.SharedKernel.csproj" />
+    <Project Path="src/BuildingBlocks/Erp.Web/Erp.Web.csproj" />
+  </Folder>
+  <Folder Name="/src/Host/">
+    <Project Path="src/Host/Erp.Api/Erp.Api.csproj" />
+    <Project Path="src/Host/Erp.Migrator/Erp.Migrator.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/" />
+  <Folder Name="/src/Modules/Configuration/">
+    <Project Path="src/Modules/Configuration/Erp.Modules.Configuration.Application/Erp.Modules.Configuration.Application.csproj" />
+    <Project Path="src/Modules/Configuration/Erp.Modules.Configuration.Contracts/Erp.Modules.Configuration.Contracts.csproj" />
+    <Project Path="src/Modules/Configuration/Erp.Modules.Configuration.Domain/Erp.Modules.Configuration.Domain.csproj" />
+    <Project Path="src/Modules/Configuration/Erp.Modules.Configuration.Infrastructure/Erp.Modules.Configuration.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Identity/">
+    <Project Path="src/Modules/Identity/Erp.Modules.Identity.Application/Erp.Modules.Identity.Application.csproj" />
+    <Project Path="src/Modules/Identity/Erp.Modules.Identity.Contracts/Erp.Modules.Identity.Contracts.csproj" />
+    <Project Path="src/Modules/Identity/Erp.Modules.Identity.Domain/Erp.Modules.Identity.Domain.csproj" />
+    <Project Path="src/Modules/Identity/Erp.Modules.Identity.Infrastructure/Erp.Modules.Identity.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/src/Modules/Organization/">
+    <Project Path="src/Modules/Organization/Erp.Modules.Organization.Application/Erp.Modules.Organization.Application.csproj" />
+    <Project Path="src/Modules/Organization/Erp.Modules.Organization.Contracts/Erp.Modules.Organization.Contracts.csproj" />
+    <Project Path="src/Modules/Organization/Erp.Modules.Organization.Domain/Erp.Modules.Organization.Domain.csproj" />
+    <Project Path="src/Modules/Organization/Erp.Modules.Organization.Infrastructure/Erp.Modules.Organization.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Erp.ArchitectureTests/Erp.ArchitectureTests.csproj" />
+    <Project Path="tests/Erp.IntegrationTests/Erp.IntegrationTests.csproj" />
+    <Project Path="tests/Erp.UnitTests/Erp.UnitTests.csproj" />
+  </Folder>
+</Solution>

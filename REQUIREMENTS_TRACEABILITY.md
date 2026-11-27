@@ -1,5 +1,7 @@
 # Requirements Traceability Matrix
 
+Phase 2 update (2026-11-27): rows marked **Tested** are implemented in `backend/` and covered by automated tests.
+
 Status legend: **Designed** = covered by architecture docs, not implemented · **Designed (OQ)** = designed with a recommended default awaiting confirmation · **Deferred** = intentionally later phase/out of v1 · **Implemented** / **Tested** (used from Phase 2 on).
 
 Phase numbers follow [docs/business/04-implementation-roadmap.md](docs/business/04-implementation-roadmap.md) (P7a = accounting core moved earlier, ADR-019 proposed).
@@ -7,41 +9,41 @@ Phase numbers follow [docs/business/04-implementation-roadmap.md](docs/business/
 | ID | Requirement | Spec | Module | Phase | Design reference | Status |
 |---|---|---|---|---|---|---|
 | **Architecture** |||||||
-| R-ARC-01 | Modular monolith, Clean Architecture, DDD bounded contexts | 2.1 | All | P2 | ADR-001/002, 01-solution-architecture | Designed |
-| R-ARC-02 | CQRS where valuable | 2.1 | All | P2 | ADR-016 | Designed |
-| R-ARC-03 | Domain events, integration events, transactional outbox | 2.1, 22 | BuildingBlocks | P2 | ADR-007, 07-transaction-consistency §19.7 | Designed |
-| R-ARC-04 | Optimistic concurrency, explicit transactions | 2.1, 21 | All | P2 | 07-transaction-consistency §19.3–19.5 | Designed |
+| R-ARC-01 | Modular monolith, Clean Architecture, DDD bounded contexts | 2.1 | All | P2 | ADR-001/002, 01-solution-architecture | Tested |
+| R-ARC-02 | CQRS where valuable | 2.1 | All | P2 | ADR-016 | Partial (commands vs projections in Phase 2 modules) |
+| R-ARC-03 | Domain events, integration events, transactional outbox | 2.1, 22 | BuildingBlocks | P2 | ADR-007, 07-transaction-consistency §19.7 | Tested |
+| R-ARC-04 | Optimistic concurrency, explicit transactions | 2.1, 21 | All | P2 | 07-transaction-consistency §19.3–19.5 | Tested |
 | R-ARC-05 | Modules extractable to services later | 2.1 | All | — | ADR-005/006 | Designed |
 | R-ARC-06 | No dependencies without architectural reason | 3 | All | All | 01-solution-architecture §2.9 | Designed |
 | **Tenancy & organization** |||||||
-| R-TEN-01 | Distinguish Tenant / Company / Legal Entity / Branch / Warehouse | 4 | Organization | P2 | 03-multi-tenancy §13.1 | Designed |
+| R-TEN-01 | Distinguish Tenant / Company / Legal Entity / Branch / Warehouse | 4 | Organization | P2 | 03-multi-tenancy §13.1 | Tested |
 | R-TEN-02 | Scenarios: 1 tenant–N companies, N branches, N warehouses, N legal entities with separate books | 4 | Organization, Accounting | P2/P7a | 03-multi-tenancy, ADR-017 | Designed |
-| R-TEN-03 | Shared DB with TenantId | 4 | BuildingBlocks | P2 | ADR-003/004 | Designed |
+| R-TEN-03 | Shared DB with TenantId | 4 | BuildingBlocks | P2 | ADR-003/004 | Tested |
 | R-TEN-04 | Database per tenant | 4, 20.1 | Platform | P11 | ADR-003 | Deferred |
-| R-TEN-05 | Dedicated on-prem DB | 4, 20.2 | Platform | P2 | 03-multi-tenancy §13.2 | Designed |
-| R-TEN-06 | Tenant never trusted from frontend | 4 | Identity | P2 | 03-multi-tenancy §13.3 | Designed |
-| R-TEN-07 | Cross-tenant isolation tests | 4, 23 | Tests | P2 | 03-multi-tenancy §13.5 | Designed |
-| R-TEN-08 | Tenant provisioning | 20.1 | Platform | P2/P11 | 03-multi-tenancy §13.6 | Designed |
+| R-TEN-05 | Dedicated on-prem DB | 4, 20.2 | Platform | P2 | 03-multi-tenancy §13.2 | Tested |
+| R-TEN-06 | Tenant never trusted from frontend | 4 | Identity | P2 | 03-multi-tenancy §13.3 | Tested |
+| R-TEN-07 | Cross-tenant isolation tests | 4, 23 | Tests | P2 | 03-multi-tenancy §13.5 | Tested |
+| R-TEN-08 | Tenant provisioning | 20.1 | Platform | P2/P11 | 03-multi-tenancy §13.6 | Tested |
 | **Configuration** |||||||
-| R-CFG-01 | Module activation per company with dependency validation | 1, 5 | Configuration | P2 | 01-business-capability-map §3.3 | Designed |
-| R-CFG-02 | Business policies (negative stock, approvals, POS, mfg, batch/serial/expiry, credit limits, reservations, commissions, multi-currency) | 5 | Configuration | P2 | ADR-020 | Designed |
-| R-CFG-03 | No scattered business-type if/else | 5 | All | All | ADR-020 | Designed |
+| R-CFG-01 | Module activation per company with dependency validation | 1, 5 | Configuration | P2 | 01-business-capability-map §3.3 | Tested |
+| R-CFG-02 | Business policies (negative stock, approvals, POS, mfg, batch/serial/expiry, credit limits, reservations, commissions, multi-currency) | 5 | Configuration | P2 | ADR-020 | Tested |
+| R-CFG-03 | No scattered business-type if/else | 5 | All | All | ADR-020 | Tested |
 | **Identity & security** |||||||
-| R-SEC-01 | ASP.NET Identity, JWT, refresh token rotation | 3, 15 | Identity | P2 | 06-security-model §18.1, ADR-013 | Designed |
-| R-SEC-02 | RBAC + fine-grained permissions | 15 | Identity | P2 | 06-security-model §18.2 | Designed |
-| R-SEC-03 | Branch & warehouse restrictions | 15 | Identity | P2 | 06-security-model §18.2 | Designed |
-| R-SEC-04 | Approval & sensitive operation permissions | 15 | Identity, Workflow | P2/P5 | 06-security-model §18.2 | Designed |
-| R-SEC-05 | Audit of financial, inventory, price, accounting-config, permission, posting, cancellation changes | 15 | Audit | P2 | 06-security-model §18.3 | Designed |
-| R-SEC-06 | Tamper-protected audit history | 15 | Audit | P2 | 06-security-model §18.3 | Designed |
-| R-SEC-07 | Secure secrets management, none in source control | 15, 20.3 | Platform | P2 | 06-security-model §18.4, 04-deployment §14.1 | Designed |
+| R-SEC-01 | ASP.NET Identity, JWT, refresh token rotation | 3, 15 | Identity | P2 | 06-security-model §18.1, ADR-013 | Tested |
+| R-SEC-02 | RBAC + fine-grained permissions | 15 | Identity | P2 | 06-security-model §18.2 | Tested |
+| R-SEC-03 | Branch & warehouse restrictions | 15 | Identity | P2 | 06-security-model §18.2 | Partial (scopes stored, not yet applied to data) |
+| R-SEC-04 | Approval & sensitive operation permissions | 15 | Identity, Workflow | P2/P5 | 06-security-model §18.2 | Partial (sensitive permissions flagged; step-up auth pending) |
+| R-SEC-05 | Audit of financial, inventory, price, accounting-config, permission, posting, cancellation changes | 15 | Audit | P2 | 06-security-model §18.3 | Tested |
+| R-SEC-06 | Tamper-protected audit history | 15 | Audit | P2 | 06-security-model §18.3 | Tested |
+| R-SEC-07 | Secure secrets management, none in source control | 15, 20.3 | Platform | P2 | 06-security-model §18.4, 04-deployment §14.1 | Partial (config via env/secret store; no vault adapter yet) |
 | **Platform services** |||||||
-| R-PLT-01 | Localization AR/EN | 2.2, 19 | Core | P2 | 05-frontend-architecture §16.7 | Designed |
-| R-PLT-02 | Notifications | 2.2 | Core | P2/P10 | 04-deployment §14.2 | Designed |
-| R-PLT-03 | Concurrency-safe document numbering per tenant/company/LE/branch/doc type/fiscal year | 17 | Documents | P2 | 07-transaction-consistency §19.8, ADR-021 | Designed (OQ-ACC-2) |
+| R-PLT-01 | Localization AR/EN | 2.2, 19 | Core | P2 | 05-frontend-architecture §16.7 | Tested |
+| R-PLT-02 | Notifications | 2.2 | Core | P2/P10 | 04-deployment §14.2 | Partial (outbox delivery; no notification channels) |
+| R-PLT-03 | Concurrency-safe document numbering per tenant/company/LE/branch/doc type/fiscal year | 17 | Documents | P2 | 07-transaction-consistency §19.8, ADR-021 | Tested |
 | R-PLT-04 | File management / attachments | 2.2, 17 | Documents | P2 | 02-database-erd §6.9 | Designed |
 | R-PLT-05 | Document templates, PDF, printing | 17 | Documents | P6 | API_CONTRACTS §2 | Designed (OQ-LIC-1) |
 | R-PLT-06 | Document status history & historical snapshots | 17 | Documents | P2 | 03-document-lifecycles | Designed |
-| R-PLT-07 | Logging (Serilog), health checks, OpenTelemetry | 3 | Platform | P2 | 04-deployment | Designed |
+| R-PLT-07 | Logging (Serilog), health checks, OpenTelemetry | 3 | Platform | P2 | 04-deployment | Tested |
 | **Master data** |||||||
 | R-MD-01 | Product, variant, attribute, category, brand, manufacturer | 6.1 | Catalog | P3 | 01-aggregates §5.3 | Designed |
 | R-MD-02 | Product types (stockable, consumable, service, bundle, manufactured, raw, semi-finished, finished) | 6.1 | Catalog | P3 | 01-aggregates §5.3 | Designed |
@@ -125,15 +127,15 @@ Phase numbers follow [docs/business/04-implementation-roadmap.md](docs/business/
 | **Frontend** |||||||
 | R-UI-01 | Angular structure core/shared/layouts/features with pages/components/data-access/models/state/forms | 19 | Frontend | P2 | 05-frontend §16.2 | Designed |
 | R-UI-02 | RTL/LTR, light/dark, responsive, keyboard, barcode | 19 | Frontend | P2 | 05-frontend §16.7–16.8 | Designed |
-| R-UI-03 | Sidebar from enabled modules + permissions, not hardcoded | 19 | Frontend | P2 | 05-frontend §16.4 | Designed |
+| R-UI-03 | Sidebar from enabled modules + permissions, not hardcoded | 19 | Frontend | P2 | 05-frontend §16.4 | Partial (server navigation API done; UI pending) |
 | R-UI-04 | Reusable data table (paging, filtering, sorting, columns, export, saved views, permission-aware actions) | 19 | Frontend | P2 | 05-frontend §16.5 | Designed |
 | R-UI-05 | Reusable forms & lookups | 19 | Frontend | P2/P3 | 05-frontend §16.6 | Designed |
 | **Deployment** |||||||
-| R-DEP-01 | Same codebase cloud & on-prem; environment-based config | 20 | Platform | P2/P11 | 04-deployment §14.1 | Designed |
-| R-DEP-02 | Abstractions for storage, secrets, cache, jobs, notifications | 20.4 | Platform | P2 | 04-deployment §14.2 | Designed |
+| R-DEP-01 | Same codebase cloud & on-prem; environment-based config | 20 | Platform | P2/P11 | 04-deployment §14.1 | Partial (env-based config; on-prem bundle not built) |
+| R-DEP-02 | Abstractions for storage, secrets, cache, jobs, notifications | 20.4 | Platform | P2 | 04-deployment §14.2 | Tested |
 | R-DEP-03 | On-prem: offline package, local auth, SMTP, backups, migration tooling, no internet dependency | 20.2 | Platform | P11 | 04-deployment §15 | Designed |
-| R-DEP-04 | Versioned migrations, backup before upgrade, logging, approval for destructive changes | 20.5 | Platform | P2/P11 | 04-deployment §15.1, ADR-015 | Designed |
+| R-DEP-04 | Versioned migrations, backup before upgrade, logging, approval for destructive changes | 20.5 | Platform | P2/P11 | 04-deployment §15.1, ADR-015 | Tested |
 | R-DEP-05 | Subscription billing as integration-ready module | 20.1 | Platform | P10 | 04-deployment §14.2 | Deferred |
-| R-DEP-06 | Docker, Compose, CI/CD, monitoring | 3, 24 | Platform | P2/P11 | 04-deployment §15.2 | Designed |
+| R-DEP-06 | Docker, Compose, CI/CD, monitoring | 3, 24 | Platform | P2/P11 | 04-deployment §15.2 | Partial (Dockerfiles, Compose, CI written; images not built) |
 | **Testing** |||||||
 | R-TST-01 | Domain, application, integration, E2E tests incl. complete workflows | 23 | Tests | all | 08-testing-strategy | Designed |

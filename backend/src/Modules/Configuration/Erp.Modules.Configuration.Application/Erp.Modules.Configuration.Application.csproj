@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../Erp.Modules.Configuration.Domain/Erp.Modules.Configuration.Domain.csproj" />
+    <ProjectReference Include="../Erp.Modules.Configuration.Contracts/Erp.Modules.Configuration.Contracts.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Erp.Application/Erp.Application.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+  </ItemGroup>
+</Project>

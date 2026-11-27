@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1
+# Erp.Migrator — run as an explicit deployment step: `migrate` or `init-tenant ...` (ADR-015).
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY backend/ ./
+RUN dotnet restore src/Host/Erp.Migrator/Erp.Migrator.csproj
+RUN dotnet publish src/Host/Erp.Migrator/Erp.Migrator.csproj -c Release -o /app --no-restore /p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+WORKDIR /app
+COPY --from=build /app ./
+USER $APP_UID
+ENTRYPOINT ["dotnet", "Erp.Migrator.dll"]
+CMD ["migrate"]

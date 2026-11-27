@@ -1,0 +1,53 @@
+name: backend-ci
+
+on:
+  push:
+    branches: [main]
+    paths: ["backend/**", ".github/workflows/backend-ci.yml"]
+  pull_request:
+    paths: ["backend/**", ".github/workflows/backend-ci.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Ci_Only_Passw0rd!
+        ports: ["1433:1433"]
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Ci_Only_Passw0rd!' -Q 'SELECT 1'"
+          --health-interval 10s --health-retries 12
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: backend/global.json
+      - run: dotnet restore Erp.slnx
+      - run: dotnet build Erp.slnx --no-restore -c Release
+      - name: Unit tests
+        run: dotnet test --project tests/Erp.UnitTests -c Release --no-build
+      - name: Architecture tests
+        run: dotnet test --project tests/Erp.ArchitectureTests -c Release --no-build
+      - name: Integration tests (SQL Server)
+        env:
+          ERP_TEST_SQL: "Server=localhost,1433;User Id=sa;Password=Ci_Only_Passw0rd!;TrustServerCertificate=True"
+        run: dotnet test --project tests/Erp.IntegrationTests -c Release --no-build
+      - name: Check for model changes without a migration
+        run: |
+          dotnet tool install --global dotnet-ef --version 10.0.15
+          for ctx in "src/BuildingBlocks/Erp.Infrastructure PlatformDbContext" \
+                     "src/Modules/Organization/Erp.Modules.Organization.Infrastructure OrganizationDbContext" \
+                     "src/Modules/Identity/Erp.Modules.Identity.Infrastructure IdentityDbContext" \
+                     "src/Modules/Configuration/Erp.Modules.Configuration.Infrastructure ConfigurationDbContext"; do
+            set -- $ctx
+            dotnet ef migrations has-pending-model-changes -p "$1" -s src/Host/Erp.Migrator -c "$2" --no-build --configuration Release
+          done

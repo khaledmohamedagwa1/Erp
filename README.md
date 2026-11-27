@@ -2,11 +2,10 @@
 
 Angular + ASP.NET Core + SQL Server · Modular Monolith · Clean Architecture · DDD · Double-Entry Accounting · Cloud SaaS & On-Premises
 
-> **Current phase: Phase 0 (Business Analysis) + Phase 1 (Architecture) — documentation only.**
-> No application code exists yet. Per the master specification (Part 26), implementation starts only after
-> the architecture and the open business-policy decisions in
-> [`docs/business/03-open-questions-and-missing-requirements.md`](docs/business/03-open-questions-and-missing-requirements.md)
-> have been reviewed and approved.
+> **Current phase: Phase 2 (Platform foundation) — backend implemented and tested; frontend not started.**
+> See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) and [backend/README.md](backend/README.md).
+> Business modules (Phase 3+) still wait on the open policy decisions in
+> [`docs/business/03-open-questions-and-missing-requirements.md`](docs/business/03-open-questions-and-missing-requirements.md).
 
 ## Document map
 

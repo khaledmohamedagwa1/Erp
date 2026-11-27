@@ -1,10 +1,27 @@
 # Known Limitations
 
-_Last updated: 2026-11-27 (Phase 0/1)_
+_Last updated: 2026-11-27 (Phase 2 backend)_
 
 ## Current state
 
-* **Nothing is implemented.** The repository contains architecture and business documentation only. No feature should be considered available.
+* Only the **Phase 2 platform foundation backend** exists (organization, identity, configuration, tenancy, audit, numbering, outbox). No business module (catalog, inventory, sales, purchasing, accounting…) is implemented yet.
+* There is **no frontend** in the repository. The UI/UX prototype is a separate claude.ai artifact with sample data; it does not call the API.
+
+## Phase 2 gaps (planned, not yet built)
+
+| Area | Limitation |
+|---|---|
+| Identity | No MFA (TOTP), password reset, email confirmation, user deactivation endpoint or external OIDC sign-in yet. |
+| Identity | Branch/warehouse data scopes are stored per user but not yet applied to queries (no branch- or warehouse-scoped business data exists yet). |
+| API | Idempotency keys (`Idempotency-Key`) are not implemented yet; they are required before the first posting/POS/payment endpoint (Phase 4+). |
+| API | OpenAPI document does not yet declare the bearer security scheme. |
+| Reliability | No automatic retry of transient SQL errors (deadlocks) around a command; the client receives a 500 and may retry. |
+| Outbox | Delivery is at-least-once to in-process handlers; the consumer inbox (dedupe table) is designed but not yet built. Domain events are not dispatched in-process before commit. |
+| Audit | The hash chain serialises audit writes per tenant (one lock row per tenant). Fine for back-office load; to be revisited for high-volume POS. |
+| Rate limiting | In-memory, per instance. Multi-instance SaaS needs a distributed limiter or the reverse proxy's. |
+| Caching | In-memory caches (60 s) for sessions/permissions; with several API instances a revoked session can stay usable on another instance for up to 60 s until Redis-backed invalidation is added. |
+| Deployment | Dockerfiles and the Compose stack were written but not built in the development environment. |
+| Tenancy | Platform-operator endpoints use a static API key; a proper operator identity is future work. |
 
 ## Design-level limitations (intentional for v1, documented so they are not mistaken for production features)
 

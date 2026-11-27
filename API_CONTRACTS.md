@@ -1,6 +1,6 @@
 # API Contracts and Conventions (Deliverable 17)
 
-> Status: **conventions defined; no endpoints implemented yet.** This file is updated in every phase with the endpoints actually implemented.
+> Status: **Phase 2 endpoints implemented** (see §6). This file is updated in every phase with the endpoints actually implemented.
 
 ## 1. General conventions
 
@@ -125,6 +125,35 @@ Idempotency-Key: 0b9b2c1e-…
 
 Errors: `409 period-closed`, `409 inventory.insufficient-stock`, `409 posting-rule-missing`, `409 credit-limit-exceeded`, `409 invalid-state-transition`, `412`, `422`.
 
-## 6. Implemented endpoints
+## 6. Implemented endpoints (Phase 2)
 
-_None yet (Phase 0/1)._
+All `/api/v1` endpoints except sign-in require `Authorization: Bearer`. "Company" means the `X-Company-Id` header is required and validated.
+
+| Method & path | Permission | Company | Notes |
+|---|---|---|---|
+| `POST /api/platform/tenants` | `X-Platform-Key` | — | Provisions tenant, first company (legal entity, HQ branch, main + transit warehouse), administrator, default modules and policies in one transaction. Disabled (404) when no key is configured. |
+| `POST /api/v1/auth/login` | anonymous, rate-limited | — | Body `{tenantCode?, email, password}`. Returns `{accessToken, accessTokenExpiresAtUtc, userId, tenantId, displayName}`; sets `erp_refresh` HttpOnly cookie (path `/api/v1/auth`). Errors: `auth.invalid-credentials`, `auth.locked-out`. |
+| `POST /api/v1/auth/refresh` | cookie + header `X-ERP-Request` | — | Rotates the refresh token. Reusing an old token revokes the session (`auth.refresh-token-reused`). |
+| `POST /api/v1/auth/logout` | authenticated | — | Revokes the session; access token stops working immediately. 204. |
+| `GET /api/v1/me` | authenticated | optional | User, tenant, accessible companies, effective permissions. |
+| `GET /api/v1/me/navigation` | authenticated | optional | Menu groups filtered by enabled modules and permissions. |
+| `GET /api/v1/organization/companies` | `organization.company.read` | — | Companies the user can access. |
+| `GET /api/v1/organization/companies/{id}` | `organization.company.read` | — | 404 for companies the user cannot access. |
+| `POST /api/v1/organization/companies` | `organization.company.manage` | — | Creates company with default structure; grants the creator access. 201. |
+| `GET/POST /api/v1/organization/legal-entities` | `organization.structure.read` / `.manage` | ✔ | POST also creates the legal entity's transit warehouse. |
+| `GET/POST /api/v1/organization/branches` | `organization.structure.read` / `.manage` | ✔ | Codes unique per company (`organization.branch-code-taken`). |
+| `GET /api/v1/organization/warehouses?page&pageSize` | `organization.structure.read` | ✔ | Paged. |
+| `POST /api/v1/organization/warehouses` | `organization.structure.manage` | ✔ | Type `Physical`, `Production` or `Virtual`. |
+| `GET /api/v1/identity/users?page&pageSize&search` | `identity.user.read` | — | Paged. |
+| `POST /api/v1/identity/users` | `identity.user.manage` | — | Can only grant companies the caller can access. |
+| `PUT /api/v1/identity/users/{id}/roles` | `identity.user.manage` | — | Replaces roles. |
+| `PUT /api/v1/identity/users/{id}/companies/{companyId}` | `identity.user.manage` | — | `{granted, branchIds?, warehouseIds?}`; empty scopes = all. |
+| `GET/POST /api/v1/identity/roles` | `identity.role.read` / `.manage` | — | Unknown permission codes rejected. |
+| `PUT /api/v1/identity/roles/{id}/permissions` | `identity.role.manage` | — | System role "Administrator" is locked. |
+| `GET /api/v1/identity/permissions` | `identity.role.read` | — | Catalog from installed module manifests (EN/AR descriptions, sensitive flag). |
+| `GET /api/v1/configuration/modules` | `configuration.read` | ✔ | Catalog with enabled state and dependencies. |
+| `PUT /api/v1/configuration/modules/{code}` | `configuration.module.manage` | ✔ | `{enabled}`; dependency errors `configuration.module-dependency-missing`, `configuration.module-in-use`, `configuration.core-module`. |
+| `GET /api/v1/configuration/policies/{section}` | `configuration.read` | ✔ | `inventory`, `sales`, `procurement`; returns `ETag`. |
+| `PUT /api/v1/configuration/policies/{section}` | `configuration.policy.manage` | ✔ | Requires `If-Match` (428 if missing, 412 if stale); validated (422). |
+| `GET /health/live`, `GET /health/ready` | anonymous | — | Readiness checks the database. |
+| `GET /openapi/v1.json`, `/swagger` | Development only | — | |
