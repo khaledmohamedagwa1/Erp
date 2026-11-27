@@ -40,3 +40,4 @@ The base unit cannot change once another module reports the product as used (`IP
 * `ICatalogQueries.GetProductsAsync(ids)` → `ProductInfo` with units, tracking and the effective costing method / posting group.
 * `IPriceCalculator.GetPriceAsync(...)` → `PriceQuote` or null.
 * `IProductUsageProbe` — implemented by Inventory to lock base units of used products.
+* `ICatalogVariantService` — `GetVariantsAsync(productIds)` → variants with attribute values; `GenerateVariantsAsync(productId, attribute → values)` creates the missing combinations (SKU `{product}-{value}-…`, at most 500 per call). Also `POST /products/{id}/variants/generate` (`catalog.product.manage`). Used by Manufacturing for variant-specific BOM lines.

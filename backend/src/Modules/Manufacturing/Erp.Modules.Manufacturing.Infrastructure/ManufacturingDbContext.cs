@@ -33,6 +33,14 @@ public sealed class ManufacturingDbContext(DbContextOptions<ManufacturingDbConte
 
     public DbSet<MrpRun> MrpRuns => Set<MrpRun>();
 
+    public DbSet<ManufacturingSettings> Settings => Set<ManufacturingSettings>();
+
+    public DbSet<CostVersion> CostVersions => Set<CostVersion>();
+
+    public DbSet<CostPool> CostPools => Set<CostPool>();
+
+    public DbSet<AbsorptionRun> AbsorptionRuns => Set<AbsorptionRun>();
+
     protected override void ConfigureModel(ModelBuilder modelBuilder)
     {
         // Child collections are stored as JSON columns, never as entity types.
@@ -44,6 +52,10 @@ public sealed class ManufacturingDbContext(DbContextOptions<ManufacturingDbConte
         modelBuilder.Ignore<MrpSuggestion>();
         modelBuilder.Ignore<MrpShortage>();
         modelBuilder.Ignore<PeggingEntry>();
+        modelBuilder.Ignore<ProductionSubstitution>();
+        modelBuilder.Ignore<StandardCostItem>();
+        modelBuilder.Ignore<AbsorptionLine>();
+        modelBuilder.Ignore<AbsorptionAccountAmount>();
 
         modelBuilder.Entity<WorkCenter>(b =>
         {
@@ -57,6 +69,7 @@ public sealed class ManufacturingDbContext(DbContextOptions<ManufacturingDbConte
             b.Property(x => x.MachineRatePerHour).HasPrecision(19, 6);
             b.Property(x => x.OverheadRatePerHour).HasPrecision(19, 6);
             b.Property(x => x.OverheadBasis).HasConversion<string>().HasMaxLength(20);
+            b.Property(x => x.WorkingDaysMask);
             b.HasIndex(TenantIdProperty, nameof(WorkCenter.CompanyId), nameof(WorkCenter.Code)).IsUnique();
         });
 
@@ -105,12 +118,25 @@ public sealed class ManufacturingDbContext(DbContextOptions<ManufacturingDbConte
             b.Property(x => x.CompletedQuantity).HasPrecision(18, 6);
             b.Property(x => x.ScrappedQuantity).HasPrecision(18, 6);
             foreach (var money in new[] { nameof(ProductionOrder.WipBalance), nameof(ProductionOrder.MaterialCost), nameof(ProductionOrder.LaborCost),
-                         nameof(ProductionOrder.MachineCost), nameof(ProductionOrder.OverheadCost), nameof(ProductionOrder.ReceivedCost), nameof(ProductionOrder.VarianceAmount) })
+                         nameof(ProductionOrder.MachineCost), nameof(ProductionOrder.OverheadCost), nameof(ProductionOrder.ReceivedCost), nameof(ProductionOrder.VarianceAmount),
+                         nameof(ProductionOrder.MaterialPriceVariance), nameof(ProductionOrder.MaterialUsageVariance), nameof(ProductionOrder.ConversionVariance),
+                         nameof(ProductionOrder.OtherVariance) })
             {
                 b.Property<decimal>(money).HasPrecision(19, 4);
             }
 
             b.Property(x => x.SourceReference).HasMaxLength(100);
+            b.Property(x => x.OrderType).HasConversion<string>().HasMaxLength(20);
+            b.Property(x => x.CostingMethod).HasConversion<string>().HasMaxLength(20);
+            foreach (var cost in new[] { nameof(ProductionOrder.StandardMaterialUnitCost), nameof(ProductionOrder.StandardLaborUnitCost),
+                         nameof(ProductionOrder.StandardMachineUnitCost), nameof(ProductionOrder.StandardOverheadUnitCost) })
+            {
+                b.Property<decimal>(cost).HasPrecision(19, 6);
+            }
+
+            b.Ignore(x => x.StandardConversionUnitCost);
+            b.Ignore(x => x.StandardUnitCost);
+            JsonList(b.Property(x => x.Substitutions));
             b.Ignore(x => x.OpenQuantity);
             b.Ignore(x => x.IsOpenForWork);
             JsonList(b.Property(x => x.Components));
@@ -128,6 +154,7 @@ public sealed class ManufacturingDbContext(DbContextOptions<ManufacturingDbConte
             b.Property(x => x.LotSize).HasPrecision(18, 6);
             b.Property(x => x.LotSizeRule).HasConversion<string>().HasMaxLength(20);
             b.Property(x => x.Procurement).HasConversion<string>().HasMaxLength(10);
+            b.Property(x => x.CostingMethod).HasConversion<string>().HasMaxLength(20);
             b.HasIndex(TenantIdProperty, nameof(ItemPlanningParameters.CompanyId), nameof(ItemPlanningParameters.ProductId)).IsUnique();
         });
 
@@ -139,6 +166,46 @@ public sealed class ManufacturingDbContext(DbContextOptions<ManufacturingDbConte
             JsonList(b.Property(x => x.Suggestions));
             JsonList(b.Property(x => x.Shortages));
             b.HasIndex(TenantIdProperty, nameof(MrpRun.CompanyId), nameof(MrpRun.Number)).IsUnique();
+        });
+
+        modelBuilder.Entity<ManufacturingSettings>(b =>
+        {
+            b.ToTable("ManufacturingSettings");
+            Key(b);
+            b.Property(x => x.DefaultCostingMethod).HasConversion<string>().HasMaxLength(20);
+            b.HasIndex(TenantIdProperty, nameof(ManufacturingSettings.CompanyId)).IsUnique();
+        });
+
+        modelBuilder.Entity<CostVersion>(b =>
+        {
+            b.ToTable("CostVersion");
+            Key(b);
+            b.Property(x => x.Code).HasMaxLength(30).IsRequired();
+            b.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            JsonList(b.Property(x => x.Items));
+            b.HasIndex(TenantIdProperty, nameof(CostVersion.CompanyId), nameof(CostVersion.Code)).IsUnique();
+        });
+
+        modelBuilder.Entity<CostPool>(b =>
+        {
+            b.ToTable("CostPool");
+            Key(b);
+            b.Property(x => x.Code).HasMaxLength(30).IsRequired();
+            b.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            b.Property(x => x.Kind).HasConversion<string>().HasMaxLength(20);
+            JsonList(b.Property(x => x.WorkCenterIds));
+            JsonList(b.Property(x => x.ExpenseAccountIds));
+            b.HasIndex(TenantIdProperty, nameof(CostPool.CompanyId), nameof(CostPool.Code)).IsUnique();
+        });
+
+        modelBuilder.Entity<AbsorptionRun>(b =>
+        {
+            b.ToTable("AbsorptionRun");
+            Key(b);
+            b.Ignore(x => x.TotalVariance);
+            JsonList(b.Property(x => x.Lines));
+            b.HasIndex(TenantIdProperty, nameof(AbsorptionRun.LegalEntityId), nameof(AbsorptionRun.PeriodFrom), nameof(AbsorptionRun.PeriodTo)).IsUnique();
         });
     }
 

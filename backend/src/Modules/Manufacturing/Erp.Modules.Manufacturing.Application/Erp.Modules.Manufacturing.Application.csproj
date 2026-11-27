@@ -9,6 +9,7 @@
     <ProjectReference Include="../../Inventory/Erp.Modules.Inventory.Contracts/Erp.Modules.Inventory.Contracts.csproj" />
     <ProjectReference Include="../../Procurement/Erp.Modules.Procurement.Contracts/Erp.Modules.Procurement.Contracts.csproj" />
     <ProjectReference Include="../../Sales/Erp.Modules.Sales.Contracts/Erp.Modules.Sales.Contracts.csproj" />
+    <ProjectReference Include="../../Parties/Erp.Modules.Parties.Contracts/Erp.Modules.Parties.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" />

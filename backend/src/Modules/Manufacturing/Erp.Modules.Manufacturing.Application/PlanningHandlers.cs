@@ -12,7 +12,7 @@ namespace Erp.Modules.Manufacturing.Application;
 public sealed record PeggingDto(string SourceType, string SourceReference, DateOnly DueDate, decimal Quantity);
 
 public sealed record MrpSuggestionDto(Guid SuggestionId, Guid ProductId, string Action, decimal Quantity, DateOnly DueDate, DateOnly OrderByDate, bool IsLate,
-    string Status, Guid? ProductionOrderId, IReadOnlyList<PeggingDto> Pegging);
+    string Status, Guid? ProductionOrderId, IReadOnlyList<PeggingDto> Pegging, Guid? PurchaseOrderId);
 
 public sealed record MrpShortageDto(Guid ProductId, decimal Quantity, DateOnly NeededBy, string Reason);
 
@@ -23,7 +23,8 @@ internal static class PlanningMapping
 {
     public static MrpRunDto ToDto(MrpRun run, IReadOnlyList<string>? sources = null) => new(run.Id, run.Number, run.RunDate, run.HorizonDays, sources ?? [],
         run.Suggestions.Select(s => new MrpSuggestionDto(s.SuggestionId, s.ProductId, s.Action.ToString(), s.Quantity, s.DueDate, s.OrderByDate, s.IsLate,
-            s.Status.ToString(), s.ProductionOrderId, s.Pegging.Select(p => new PeggingDto(p.SourceType, p.SourceReference, p.DueDate, p.Quantity)).ToList())).ToList(),
+            s.Status.ToString(), s.ProductionOrderId, s.Pegging.Select(p => new PeggingDto(p.SourceType, p.SourceReference, p.DueDate, p.Quantity)).ToList(),
+            s.PurchaseOrderId)).ToList(),
         run.Shortages.Select(s => new MrpShortageDto(s.ProductId, s.Quantity, s.NeededBy, s.Reason)).ToList());
 }
 
@@ -218,7 +219,7 @@ public sealed class ConvertSuggestionsValidator : AbstractValidator<ConvertSugge
     }
 }
 
-/// <summary>Turns production suggestions into Draft production orders. Purchase suggestions stay proposals until Procurement is connected.</summary>
+/// <summary>Turns production suggestions into Draft production orders (purchase suggestions: <see cref="ConvertPurchaseSuggestionsCommand"/>).</summary>
 public sealed class ConvertSuggestionsHandler(IManufacturingDbContext db, ManufacturingSupport support, IDocumentNumberGenerator numbers)
     : ICommandHandler<ConvertSuggestionsCommand, MrpRunDto>
 {

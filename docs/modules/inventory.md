@@ -93,6 +93,7 @@ Every endpoint needs authentication, an active company and the module. An endpoi
 
 - Organization contracts: `GetWarehousesAsync(IReadOnlyCollection<Guid>)` and `GetTransitWarehouseAsync(Guid legalEntityId)`, both returning `WarehouseSummary`.
 - Configuration contracts: `IPolicyReader` with `GetInventoryPolicyAsync`, `GetSalesPolicyAsync` and `GetProcurementPolicyAsync`, returning the typed `InventoryPolicySettings`, `SalesPolicySettings` and `ProcurementPolicySettings`. Each falls back to defaults when no policy is stored.
+- `IInventoryRevaluationService.RevalueAsync` (wave 6, used by Manufacturing standard-cost activation): sets the value of everything on hand of a product in one legal entity to quantity × new unit cost per valuation area (FIFO layers still open take the new cost), records a value-only `CostAdjustment` movement, and posts Dr Inventory / Cr gain role or Dr loss role / Cr Inventory. Idempotent per (source document, product).
 - Catalog: `IProductUsageProbe` is implemented. A product with any stock movement counts as used, so Catalog applies its rules for products in use.
 
 ## Decisions and limitations

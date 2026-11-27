@@ -7,6 +7,7 @@ using Erp.Modules.Manufacturing.Application;
 using Erp.Modules.Manufacturing.Contracts;
 using Erp.Web.Http;
 using Erp.Web.Modules;
+using Erp.Web.Security;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -35,6 +36,20 @@ public sealed record ConvertRequest(IReadOnlyList<Guid> SuggestionIds, Guid Comp
 
 public sealed record RunRequest(DateOnly? RunDate, int? HorizonDays);
 
+public sealed record ConvertPurchasesRequest(IReadOnlyList<Guid> SuggestionIds, Guid WarehouseId, Guid? DefaultSupplierId);
+
+public sealed record CostVersionRequest(string Code, string Name, DateOnly EffectiveFrom);
+
+public sealed record StandardCostsRequest(IReadOnlyList<StandardCostInput> Items);
+
+public sealed record RollUpRequest(Guid? CostWarehouseId, bool OverwriteManual, IReadOnlyList<Guid>? ProductIds);
+
+public sealed record ActivateCostVersionRequest(Guid LegalEntityId);
+
+public sealed record AbsorptionRequest(Guid LegalEntityId, DateOnly From, DateOnly To);
+
+public sealed record SubstituteRequest(Guid LineId, Guid AlternativeProductId, decimal BaseQuantity);
+
 public sealed class ManufacturingModule : IErpModule
 {
     public const string Code = "manufacturing";
@@ -52,6 +67,8 @@ public sealed class ManufacturingModule : IErpModule
             new(ManufacturingPermissions.OrderManage, Code, "Create, plan, release and cancel production orders", "إنشاء أوامر الإنتاج وتخطيطها وإطلاقها وإلغاؤها"),
             new(ManufacturingPermissions.OrderPost, Code, "Issue materials, report operations, receive finished goods and close orders (posts stock and journals)", "صرف المواد وتسجيل العمليات واستلام الإنتاج التام وإقفال الأوامر", IsSensitive: true),
             new(ManufacturingPermissions.PlanningRun, Code, "Run MRP and convert suggestions", "تشغيل تخطيط الاحتياجات وتحويل الاقتراحات"),
+            new(ManufacturingPermissions.CostingManage, Code, "Maintain standard costs, activate cost versions (revalues stock) and clear absorption (posts journals)",
+                "إدارة التكاليف المعيارية وتفعيل إصداراتها (يعيد تقييم المخزون) وتسوية التحميل (يرحّل قيوداً)", IsSensitive: true),
         ],
         Menu:
         [
@@ -60,6 +77,8 @@ public sealed class ManufacturingModule : IErpModule
             new("manufacturing.routings", "Routings", "مسارات التصنيع", "/manufacturing/routings", "manufacturing", 30, ManufacturingPermissions.Read),
             new("manufacturing.work-centers", "Work centers", "مراكز العمل", "/manufacturing/work-centers", "manufacturing", 40, ManufacturingPermissions.Read),
             new("manufacturing.mrp", "MRP", "تخطيط الاحتياجات", "/manufacturing/mrp", "manufacturing", 50, ManufacturingPermissions.Read),
+            new("manufacturing.capacity", "Capacity load", "تحميل الطاقة", "/manufacturing/capacity", "manufacturing", 60, ManufacturingPermissions.Read),
+            new("manufacturing.costing", "Standard costing", "التكاليف المعيارية", "/manufacturing/costing", "manufacturing", 70, ManufacturingPermissions.Read),
         ]);
 
     public void AddServices(IServiceCollection services, IConfiguration configuration)
@@ -68,6 +87,8 @@ public sealed class ManufacturingModule : IErpModule
         services.AddScoped<IManufacturingDbContext>(sp => sp.GetRequiredService<ManufacturingDbContext>());
         services.AddScoped<ManufacturingSupport>();
         services.AddScoped<ProductionPoster>();
+        services.AddScoped<CostingPolicy>();
+        services.AddScoped<AbsorptionCalculator>();
         services.AddScoped<IManufacturingQueries, ManufacturingQueries>();
         services.AddScoped<IManufacturingReportQueries, ManufacturingReportQueries>();
 
@@ -180,5 +201,67 @@ public sealed class ManufacturingModule : IErpModule
         g.MapPost("/mrp-runs/{id:guid}/convert", async (Guid id, ConvertRequest body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new ConvertSuggestionsCommand(id, body.SuggestionIds, body.ComponentWarehouseId, body.OutputWarehouseId), ct)).ToHttpResult())
             .RequirePermission(ManufacturingPermissions.PlanningRun);
+        g.MapPost("/mrp-runs/{id:guid}/convert-purchases", async (Guid id, ConvertPurchasesRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ConvertPurchaseSuggestionsCommand(id, body.SuggestionIds, body.WarehouseId, body.DefaultSupplierId), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.PlanningRun);
+
+        // Capacity
+        g.MapGet("/capacity-load", async (DateOnly? from, DateOnly? to, Guid? mrpRunId, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new GetCapacityLoadQuery(from, to, mrpRunId), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.Read);
+
+        // Rework and substitution
+        g.MapPost("/rework-orders", async (CreateReworkOrderCommand body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(body, ct)).ToHttpResult(o => Results.Created($"/api/v1/manufacturing/production-orders/{o.Id}", o)))
+            .RequirePermission(ManufacturingPermissions.OrderManage);
+        g.MapPost("/production-orders/{id:guid}/substitute", async (Guid id, SubstituteRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new SubstituteComponentCommand(id, body.LineId, body.AlternativeProductId, body.BaseQuantity), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.OrderManage);
+
+        // Costing
+        g.MapGet("/settings", async (IDispatcher d, CancellationToken ct) => (await d.Send(new GetManufacturingSettingsQuery(), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.Read);
+        g.MapPut("/settings", async (SaveManufacturingSettingsCommand body, IDispatcher d, CancellationToken ct) => (await d.Send(body, ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.CostingManage);
+        g.MapGet("/cost-versions", async (IDispatcher d, CancellationToken ct) => (await d.Send(new ListCostVersionsQuery(), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.Read);
+        g.MapGet("/cost-versions/{id:guid}", async (Guid id, IDispatcher d, CancellationToken ct) => (await d.Send(new GetCostVersionQuery(id), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.Read);
+        g.MapPost("/cost-versions", async (CostVersionRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new CreateCostVersionCommand(body.Code, body.Name, body.EffectiveFrom), ct))
+                .ToHttpResult(v => Results.Created($"/api/v1/manufacturing/cost-versions/{v.Id}", v)))
+            .RequirePermission(ManufacturingPermissions.CostingManage);
+        g.MapPut("/cost-versions/{id:guid}/items", async (Guid id, StandardCostsRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new SetStandardCostsCommand(id, body.Items), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.CostingManage);
+        g.MapPost("/cost-versions/{id:guid}/roll-up", async (Guid id, RollUpRequest? body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new RollUpCostVersionCommand(id, body?.CostWarehouseId, body?.OverwriteManual ?? false, body?.ProductIds), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.CostingManage);
+        g.MapPost("/cost-versions/{id:guid}/approve", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new CostVersionActionCommand(id, CostVersionAction.Approve), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.CostingManage);
+        g.MapPost("/cost-versions/{id:guid}/reopen", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new CostVersionActionCommand(id, CostVersionAction.Reopen), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.CostingManage);
+        g.MapPost("/cost-versions/{id:guid}/activate", async (Guid id, ActivateCostVersionRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ActivateCostVersionCommand(id, body.LegalEntityId), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.CostingManage).RequireStepUp().RequireIdempotency();
+
+        g.MapGet("/cost-pools", async (IDispatcher d, CancellationToken ct) => (await d.Send(new ListCostPoolsQuery(), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.Read);
+        g.MapPost("/cost-pools", async (SaveCostPoolCommand body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(body with { Id = null }, ct)).ToHttpResult(p => Results.Created($"/api/v1/manufacturing/cost-pools/{p.Id}", p)))
+            .RequirePermission(ManufacturingPermissions.CostingManage);
+        g.MapPut("/cost-pools/{id:guid}", async (Guid id, SaveCostPoolCommand body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(body with { Id = id }, ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.CostingManage);
+        g.MapGet("/absorption-runs", async (IDispatcher d, CancellationToken ct) => (await d.Send(new ListAbsorptionRunsQuery(), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.Read);
+        g.MapGet("/absorption-runs/preview", async (Guid legalEntityId, DateOnly from, DateOnly to, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new PreviewAbsorptionQuery(legalEntityId, from, to), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.Read);
+        g.MapPost("/absorption-runs", async (AbsorptionRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new PostAbsorptionCommand(body.LegalEntityId, body.From, body.To), ct)).ToHttpResult())
+            .RequirePermission(ManufacturingPermissions.CostingManage).RequireIdempotency();
     }
 }

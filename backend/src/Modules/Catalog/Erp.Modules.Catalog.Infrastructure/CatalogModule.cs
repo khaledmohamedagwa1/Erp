@@ -37,6 +37,8 @@ public sealed record AddBarcodeRequest(string Barcode, Guid? UomId, Guid? Varian
 
 public sealed record AddVariantRequest(string Sku, IReadOnlyDictionary<string, string> Attributes);
 
+public sealed record GenerateVariantsRequest(IReadOnlyDictionary<string, IReadOnlyList<string>> Attributes);
+
 public sealed record AddPriceRequest(Guid ProductId, Guid? VariantId, Guid UomId, decimal MinQuantity, decimal Price, DateOnly? ValidFrom, DateOnly? ValidTo);
 
 public sealed record ReplacePricesRequest(IReadOnlyList<PriceLine> Lines);
@@ -69,6 +71,7 @@ public sealed class CatalogModule : IErpModule
         services.AddScoped<ICatalogDbContext>(sp => sp.GetRequiredService<CatalogDbContext>());
         services.AddScoped<ICatalogQueries, CatalogQueries>();
         services.AddScoped<ICatalogImportService, CatalogImportService>();
+        services.AddScoped<ICatalogVariantService, CatalogVariantService>();
         services.AddScoped<ICatalogReportQueries, CatalogReportQueries>();
         services.AddScoped<IPriceCalculator, PriceCalculator>();
         services.AddScoped<IPriceListSnapshotQueries, PriceListSnapshotQueries>();
@@ -128,6 +131,9 @@ public sealed class CatalogModule : IErpModule
             .RequirePermission(CatalogPermissions.ProductManage);
         group.MapPost("/products/{id:guid}/variants", async (Guid id, AddVariantRequest body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new AddProductVariantCommand(id, body.Sku, body.Attributes), ct)).ToHttpResult())
+            .RequirePermission(CatalogPermissions.ProductManage);
+        group.MapPost("/products/{id:guid}/variants/generate", async (Guid id, GenerateVariantsRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new GenerateProductVariantsCommand(id, body.Attributes), ct)).ToHttpResult())
             .RequirePermission(CatalogPermissions.ProductManage);
         group.MapPost("/products/{id:guid}/deactivate", async (Guid id, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new SetProductActiveCommand(id, false), ct)).ToHttpResult())

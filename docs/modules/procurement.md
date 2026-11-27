@@ -21,6 +21,8 @@ public static class ProcurementPermissions   { procurement.read, .request.manage
     .receipt.manage, .receipt.post, .invoice.manage, .invoice.post, .return.manage, .return.post, .landed-cost.manage, .landed-cost.post }
 ```
 
+`IPurchaseOrderDraftService.CreateDraftAsync` (wave 6): creates a Draft purchase order for another module (Manufacturing converts MRP purchase suggestions with it) by sending the regular create command, so validation, numbering and tax are the same as for a buyer-entered order.
+
 Events consumed (outbox, inbox-deduplicated): `ApprovalCompleted` (Workflow.Contracts) for purchase requests, orders and invoices, and `InvoiceSettled` (Finance.Contracts) for the invoice payment status. Until the Workflow module is installed `NoApprovalRequired` is registered with `TryAddScoped`.
 
 ## Documents and states
