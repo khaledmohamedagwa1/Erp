@@ -531,11 +531,17 @@ public static class SalesMapping
 /// <summary>Contract implementation for other modules (MRP demand, credit exposure).</summary>
 public sealed class SalesQueries(ISalesDbContext db) : ISalesQueries
 {
-    public async Task<IReadOnlyList<OpenSalesDemand>> GetOpenDemandAsync(IReadOnlyCollection<Guid> productIds, Guid? warehouseId = null, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<OpenSalesDemand>> GetOpenDemandAsync(IReadOnlyCollection<Guid> productIds, Guid? warehouseId = null, CancellationToken cancellationToken = default) =>
+        LoadOpenDemandAsync(productIds.ToHashSet(), warehouseId, cancellationToken);
+
+    public Task<IReadOnlyList<OpenSalesDemand>> GetAllOpenDemandAsync(Guid? warehouseId = null, CancellationToken cancellationToken = default) =>
+        LoadOpenDemandAsync(null, warehouseId, cancellationToken);
+
+    private async Task<IReadOnlyList<OpenSalesDemand>> LoadOpenDemandAsync(HashSet<Guid>? productIds, Guid? warehouseId, CancellationToken cancellationToken)
     {
         var orders = await OpenOrders().Where(o => warehouseId == null || o.WarehouseId == warehouseId).ToListAsync(cancellationToken);
         return orders.SelectMany(o => o.Lines
-                .Where(l => l.IsStockable && productIds.Contains(l.ProductId) && l.OpenToDeliver > 0)
+                .Where(l => l.IsStockable && (productIds is null || productIds.Contains(l.ProductId)) && l.OpenToDeliver > 0)
                 .Select(l => new OpenSalesDemand(o.Id, o.Number, l.Uid, l.ProductId, l.VariantId, o.WarehouseId, o.RequestedDate ?? o.DocumentDate, l.ToBase(l.OpenToDeliver))))
             .ToList();
     }

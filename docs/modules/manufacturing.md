@@ -50,8 +50,8 @@ Quantities in `MrpDemand` and `MrpSupply` are in the product's **base UOM**.
 | Source | Registered implementation | Status |
 |---|---|---|
 | Production orders (component demand and FG supply) | `ProductionOrderMrpSource` (`production-orders`) | Live |
-| Sales orders (independent demand) | `SalesOrderDemandNotConnected` (`sales-orders (not connected)`) | Placeholder: returns nothing |
-| Purchase orders (scheduled receipts) | `PurchaseOrderSupplyNotConnected` (`purchase-orders (not connected)`) | Placeholder: returns nothing |
+| Sales orders (independent demand) | `SalesOrderMrpSource` (`sales-orders`) | Confirmed, undelivered lines from `ISalesQueries.GetAllOpenDemandAsync`, minus the part already reserved in stock (from `IReservationService`), within the horizon |
+| Purchase orders (scheduled receipts) | `PurchaseOrderMrpSource` (`purchase-orders`) | Open approved/sent/partially received PO lines from `IProcurementQueries.GetAllOpenSupplyAsync`, dated at the expected date (today if none), within the horizon |
 
 When Sales and Procurement are merged, each of them should do two things:
 
@@ -149,5 +149,5 @@ Open production-order component demand counts only the part not already reserved
 - **Release reservations:** release reserves only the stock available at that moment; it does not fail when stock is short.
 - **Capacity:** MRP assumes infinite capacity. There is no capacity planning or operation scheduling; work-center capacity hours are informational.
 - **Alternatives:** alternative components on BOM lines are stored, but MRP and issues do not substitute them automatically.
-- **Sources:** the Sales and Procurement MRP sources are placeholders until those modules are merged (see above).
+- **Sources:** sales-order demand and purchase-order supply are connected (see above). Planned purchase suggestions still cannot be converted into purchase orders automatically.
 - **Concurrency:** posting actions run inside the idempotency transaction, and orders carry a row version. No range locks are taken on rows that may not exist.

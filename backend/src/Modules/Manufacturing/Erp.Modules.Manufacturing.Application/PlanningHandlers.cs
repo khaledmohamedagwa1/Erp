@@ -58,13 +58,36 @@ public sealed class ProductionOrderMrpSource(IManufacturingDbContext db) : IMrpD
     }
 }
 
-/// <summary>Placeholder until Sales registers its confirmed sales-order demand source.</summary>
-public sealed class SalesOrderDemandNotConnected : IMrpDemandSource
+/// <summary>
+/// Confirmed, undelivered sales-order lines as MRP demand, in base units. MRP's available stock is on-hand minus reserved,
+/// so the part of a line already reserved in stock is subtracted here (as for production-order components) — otherwise it
+/// would be counted twice.
+/// </summary>
+public sealed class SalesOrderMrpSource(
+    Erp.Modules.Sales.Contracts.ISalesQueries sales,
+    Erp.Modules.Inventory.Contracts.IReservationService reservations) : IMrpDemandSource
 {
-    public string Name => "sales-orders (not connected)";
+    public string Name => "sales-orders";
 
-    public Task<IReadOnlyList<MrpDemand>> GetDemandAsync(Guid companyId, DateOnly horizonEnd, CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<MrpDemand>>([]);
+    public async Task<IReadOnlyList<MrpDemand>> GetDemandAsync(Guid companyId, DateOnly horizonEnd, CancellationToken cancellationToken = default)
+    {
+        var lines = (await sales.GetAllOpenDemandAsync(cancellationToken: cancellationToken))
+            .Where(l => l.OpenBaseQuantity > 0 && l.RequiredDate <= horizonEnd).ToList();
+        var reservedByLine = new Dictionary<Guid, decimal>();
+        foreach (var orderId in lines.Select(l => l.OrderId).Distinct())
+        {
+            foreach (var reservation in await reservations.GetAsync(Erp.Modules.Sales.Contracts.SalesDocumentTypes.Order, orderId, cancellationToken))
+            {
+                reservedByLine[reservation.Reference.DemandLineId] = reservedByLine.GetValueOrDefault(reservation.Reference.DemandLineId) + reservation.Open;
+            }
+        }
+
+        return lines
+            .Select(l => new MrpDemand(l.ProductId, MfgRounding.Quantity(Math.Max(0, l.OpenBaseQuantity - reservedByLine.GetValueOrDefault(l.OrderLineId))),
+                l.RequiredDate, "SalesOrder", l.OrderNumber))
+            .Where(d => d.Quantity > 0)
+            .ToList();
+    }
 }
 
 /// <summary>Open purchase-order lines (approved, sent, partially received) as MRP supply, in base units.</summary>

@@ -46,6 +46,9 @@ public interface ISalesQueries
     /// <summary>Open (confirmed, undelivered) order quantities in base units, for the active company.</summary>
     Task<IReadOnlyList<OpenSalesDemand>> GetOpenDemandAsync(IReadOnlyCollection<Guid> productIds, Guid? warehouseId = null, CancellationToken cancellationToken = default);
 
+    /// <summary>Open demand for every product of the active company (used by MRP).</summary>
+    Task<IReadOnlyList<OpenSalesDemand>> GetAllOpenDemandAsync(Guid? warehouseId = null, CancellationToken cancellationToken = default);
+
     /// <summary>Gross value (functional currency) of confirmed order quantities not yet invoiced for the customer.</summary>
     Task<decimal> GetUninvoicedOrderExposureAsync(Guid customerId, CancellationToken cancellationToken = default);
 }
