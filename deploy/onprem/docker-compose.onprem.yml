@@ -37,6 +37,10 @@ x-erp-env: &erp-env
   Hosting__KnownNetworks__0: ${ERP_SUBNET:-172.28.0.0/24}
   Hosting__CorsAllowedOrigins__0: ${ERP_PUBLIC_ORIGIN:?set ERP_PUBLIC_ORIGIN in .env}
   Serilog__MinimumLevel__Default: ${ERP_LOG_LEVEL:-Information}
+  # Attachments live under the mounted files folder (included in scripts/backup.sh).
+  Documents__Attachments__LocalRoot: /var/lib/erp/files/attachments
+  # Empty = no PDF output (501). With the "pdf" profile: http://gotenberg:3000
+  Pdf__GotenbergUrl: ${ERP_PDF_GOTENBERG_URL:-}
   # ConnectionStrings__Erp, Auth__SigningKeyPem and Platform__ApiKey come from files in ./secrets (key-per-file).
 
 services:
@@ -108,6 +112,20 @@ services:
       - ./secrets:/run/secrets:ro
     command: ["migrate"]
     restart: "no"
+    networks: [erp]
+    logging: *erp-logging
+
+  # Optional PDF engine (profile pdf). When running, set ERP_PDF_GOTENBERG_URL in .env to http://gotenberg:3000 so documents and reports can be
+  # downloaded as PDF (?format=pdf); otherwise PDF requests answer 501 and HTML output stays available.
+  gotenberg:
+    profiles: ["pdf"]
+    image: ${ERP_GOTENBERG_IMAGE:-gotenberg/gotenberg:8}
+    command: ["gotenberg", "--api-timeout=60s", "--chromium-disable-javascript=true", "--chromium-allow-list=file:///tmp/.*"]
+    security_opt: ["no-new-privileges:true"]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1g }
+    restart: unless-stopped
     networks: [erp]
     logging: *erp-logging
 

@@ -295,7 +295,8 @@ public class ReportingTests(ErpApiFixture fixture)
         var page = await html.Content.ReadAsStringAsync(Ct);
         page.ShouldContain("dir=\"rtl\"");
         page.ShouldContain("ملخص المبيعات حسب الفترة");
-        (await (await t.Client.GetAsCompanyAsync($"{Api}/sales/summary?format=pdf", t.CompanyId)).ErrorCodeAsync()).ShouldBe("reporting.invalid-format");
+        (await (await t.Client.GetAsCompanyAsync($"{Api}/sales/summary?format=docx", t.CompanyId)).ErrorCodeAsync()).ShouldBe("reporting.invalid-format");
+        (await (await t.Client.GetAsCompanyAsync($"{Api}/sales/summary?format=pdf", t.CompanyId)).ErrorCodeAsync()).ShouldBe("reporting.pdf-not-configured");
         (await (await t.Client.GetAsCompanyAsync($"{Api}/sales/summary?from=2026-05-01&to=2026-04-01", t.CompanyId)).ErrorCodeAsync()).ShouldBe("reporting.invalid-range");
 
         // ---- Financial statements are links.

@@ -6,6 +6,7 @@
     <ProjectReference Include="../../Identity/Erp.Modules.Identity.Contracts/Erp.Modules.Identity.Contracts.csproj" />
     <ProjectReference Include="../../Organization/Erp.Modules.Organization.Contracts/Erp.Modules.Organization.Contracts.csproj" />
     <ProjectReference Include="../../Tax/Erp.Modules.Tax.Contracts/Erp.Modules.Tax.Contracts.csproj" />
+    <ProjectReference Include="../../Documents/Erp.Modules.Documents.Contracts/Erp.Modules.Documents.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" />

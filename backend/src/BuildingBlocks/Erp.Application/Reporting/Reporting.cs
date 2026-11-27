@@ -56,3 +56,24 @@ public interface IDocumentRenderer
 
     string RenderDocument(PrintableDocument document, PrintPartyDetails? party, IReadOnlyDictionary<Guid, string> unitNames, RenderContext context);
 }
+
+/// <summary>
+/// HTML → PDF conversion port (decision OQ-LIC-1, second step). The default implementation is not configured
+/// (<see cref="IsAvailable"/> is false and endpoints answer 501); the Gotenberg adapter converts through an optional
+/// Gotenberg service. Called only from read endpoints — never inside a database transaction.
+/// </summary>
+public interface IPdfRenderer
+{
+    bool IsAvailable { get; }
+
+    Task<byte[]> RenderAsync(string html, CancellationToken cancellationToken = default);
+}
+
+/// <summary>Used when no PDF engine is configured.</summary>
+public sealed class NullPdfRenderer : IPdfRenderer
+{
+    public bool IsAvailable => false;
+
+    public Task<byte[]> RenderAsync(string html, CancellationToken cancellationToken = default) =>
+        throw new InvalidOperationException("No PDF renderer is configured (set Pdf:GotenbergUrl).");
+}

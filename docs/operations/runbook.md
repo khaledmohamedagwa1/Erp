@@ -18,7 +18,7 @@ All scripts live in `$ERP_HOME/scripts`, print `-h` help, are idempotent and exi
 | `secrets/` | `Auth__SigningKeyPem`, `ConnectionStrings__Erp`, `Platform__ApiKey`, mounted read-only at `/run/secrets` | dir 0500, files 0400, uid 1654 |
 | `certs/tls.crt`, `certs/tls.key` | Customer TLS certificate (full chain) and key | 0644 / 0640 |
 | `nginx/` | Proxy configuration (replaced on upgrade) | |
-| `data/files/` | File storage (attachments; reserved) | uid 1654 |
+| `data/files/` | File storage: `attachments/` holds uploaded attachments (content-addressed per tenant). Included in full backups (`files.tar.gz`) | uid 1654 |
 | `data/sql/` | Bundled SQL Server data (only with `ERP_BUNDLED_SQL=true`) | uid 10001 |
 | `backups/` | `<UTC timestamp>/` full sets, `logs/` transaction-log backups | 0700 root |
 | `.previous/<version>/` | Compose file and nginx config of the version before the last upgrade | |
@@ -89,6 +89,28 @@ docker compose -f docker-compose.onprem.yml --env-file .env logs api worker | gr
 
 The json-file driver rotates logs at 5 × 20 MB per container. Ship them to the customer's log system with any
 Docker logging driver if required.
+
+### Attachments and PDF output
+
+- **Attachments** are stored under `data/files/attachments/<tenant>/<aa>/<sha256>` (setting
+  `Documents__Attachments__LocalRoot`, preset in the compose file). The database row holds the name, type and hash;
+  deleting an attachment is a soft delete and never removes the file (the same content may be attached elsewhere).
+  Uploads are limited to 20 MB (`Documents__Attachments__MaxUploadBytes`; the proxy allows 25 MB on
+  `/api/v1/documents/attachments`). Keep `data/files` and the database backups together: a restore of one without
+  the other leaves attachments pointing at missing files (downloads answer `documents.file-missing`).
+- To store attachments in S3 or an S3-compatible server (MinIO) instead, set `Documents__Attachments__Storage=S3` and
+  `Documents__Attachments__S3__Bucket` / `__ServiceUrl` / `__Region` in a `docker-compose.override.yml`, and put
+  `Documents__Attachments__S3__AccessKey` and `Documents__Attachments__S3__SecretKey` as files in `secrets/`.
+- **PDF output** (`?format=pdf` on printable documents and reports) needs the optional Gotenberg container. Enable it:
+
+  ```bash
+  echo 'ERP_PDF_GOTENBERG_URL=http://gotenberg:3000' >> .env
+  docker compose -f docker-compose.onprem.yml --env-file .env --profile pdf up -d
+  ```
+
+  Without it, PDF requests answer `501 reporting.pdf-not-configured` and HTML output keeps working. Gotenberg is
+  reachable only on the internal `erp` network and runs with JavaScript disabled; for offline installs add the
+  `gotenberg/gotenberg:8` image to the bundle (`ERP_GOTENBERG_IMAGE` overrides the image name).
 
 ### Monitoring
 

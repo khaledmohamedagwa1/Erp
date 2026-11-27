@@ -8,6 +8,11 @@ Schema migrations are NOT run by this chart (migrations.enabled=false). Run them
     --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":1654},"containers":[{"name":"erp-migrate","image":"{{ include "erp.image" (dict "root" . "image" .Values.migrator.image) }}","args":["migrate"],"volumeMounts":[{"name":"s","mountPath":"/run/secrets"}]}],"volumes":[{"name":"s","secret":{"secretName":"{{ .Values.secrets.existingSecret }}"}}]}}'
 Pods report not-ready (/health/ready → migrations) until the schema is current.
 {{- end }}
+{{- if and (ne (lower .Values.attachments.storage) "s3") (not .Values.attachments.persistence.existingClaim) }}
+
+WARNING: attachments use local storage without a volume claim (emptyDir): uploaded files are lost when an API pod
+restarts and are not shared between replicas. Set attachments.persistence.existingClaim (ReadWriteMany) or attachments.storage=S3.
+{{- end }}
 {{- if .Values.ingress.enabled }}
 
 URL: https://{{ (first .Values.ingress.hosts).host }}

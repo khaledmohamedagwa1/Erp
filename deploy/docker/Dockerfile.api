@@ -31,6 +31,8 @@ ENV ASPNETCORE_HTTP_PORTS=8080 \
     DOTNET_gcServer=0 \
     Erp__Role=all
 COPY --from=build /app ./
+# Attachment store mount point (local storage); a named volume inherits this ownership on first use.
+RUN mkdir -p /var/lib/erp/files && chown -R $APP_UID /var/lib/erp/files
 # Non-root user provided by the base image (UID 1654).
 USER $APP_UID
 EXPOSE 8080

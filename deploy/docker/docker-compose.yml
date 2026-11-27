@@ -58,6 +58,11 @@ services:
       Auth__SigningKeyPem: ${AUTH_SIGNING_KEY_PEM:-}
       Auth__SecureCookies: ${AUTH_SECURE_COOKIES:-false}
       Hosting__CorsAllowedOrigins__0: ${CORS_ORIGIN:-http://localhost:5173}
+      Documents__Attachments__LocalRoot: /var/lib/erp/files/attachments
+      # Empty = no PDF output (501). With --profile pdf: http://gotenberg:3000
+      Pdf__GotenbergUrl: ${PDF_GOTENBERG_URL:-}
+    volumes:
+      - files:/var/lib/erp/files
     ports:
       - "${API_PORT:-8080}:8080"
     depends_on:
@@ -69,5 +74,15 @@ services:
           memory: 1g
     restart: unless-stopped
 
+  # Optional PDF engine (profile pdf). When running, set PDF_GOTENBERG_URL in .env to http://gotenberg:3000 so documents and reports can be
+  # downloaded as PDF (?format=pdf); otherwise PDF requests answer 501 and HTML output stays available.
+  gotenberg:
+    profiles: ["pdf"]
+    image: ${ERP_GOTENBERG_IMAGE:-gotenberg/gotenberg:8}
+    command: ["gotenberg", "--api-timeout=60s", "--chromium-disable-javascript=true", "--chromium-allow-list=file:///tmp/.*"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
 volumes:
   sqldata:
+  files:

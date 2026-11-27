@@ -45,7 +45,7 @@ public sealed class ReportParameters
 
     public int? PageSize { get; set; }
 
-    /// <summary>json (default), csv, xlsx or html.</summary>
+    /// <summary>json (default), csv, xlsx, html or pdf (pdf needs a configured PDF engine).</summary>
     public string? Format { get; set; }
 
     /// <summary>en or ar; defaults to the Accept-Language header.</summary>
@@ -117,23 +117,54 @@ public sealed class ReportingModule : IErpModule
                 (await d.Send(new DeleteSavedViewCommand(id), ct)).ToHttpResult(_ => Results.NoContent()))
             .RequirePermission(ReportingPermissions.ViewManage);
 
-        group.MapGet("/documents/{documentType}/{id:guid}", async (string documentType, Guid id, string? lang, HttpContext http, DocumentPrinting printing, CancellationToken ct) =>
-            (await printing.PrintAsync(documentType, id, IsArabic(lang, http), ct)).ToHttpResult(doc =>
+        group.MapGet("/documents/{documentType}/{id:guid}", async (
+            string documentType, Guid id, string? lang, string? format, HttpContext http, DocumentPrinting printing, IPdfRenderer pdf, CancellationToken ct) =>
+        {
+            var output = (format ?? "html").Trim().ToLowerInvariant();
+            if (output is not ("html" or "pdf"))
             {
-                http.Response.Headers.ContentDisposition = $"inline; filename=\"{doc.FileName}\"";
-                return Results.Content(doc.Html, "text/html; charset=utf-8");
-            }));
+                return ReportingErrors.InvalidFormat.ToProblem();
+            }
+
+            if (output == "pdf" && !pdf.IsAvailable)
+            {
+                return PdfNotConfigured();
+            }
+
+            var printed = await printing.PrintAsync(documentType, id, IsArabic(lang, http), ct);
+            if (printed.IsFailure)
+            {
+                return printed.Error.ToProblem();
+            }
+
+            var doc = printed.Value;
+            if (output == "pdf")
+            {
+                var fileName = Path.ChangeExtension(doc.FileName, ".pdf");
+                http.Response.Headers.ContentDisposition = $"inline; filename=\"{fileName}\"";
+                return Results.File(await pdf.RenderAsync(doc.Html, ct), PdfContentType);
+            }
+
+            http.Response.Headers.ContentDisposition = $"inline; filename=\"{doc.FileName}\"";
+            return Results.Content(doc.Html, "text/html; charset=utf-8");
+        });
 
         group.MapGet("/{area}/{report}", RunReportAsync);
     }
 
     private static async Task<IResult> RunReportAsync(
-        string area, string report, [AsParameters] ReportParameters p, HttpContext http, ReportService reports, IDocumentRenderer renderer, CancellationToken ct)
+        string area, string report, [AsParameters] ReportParameters p, HttpContext http, ReportService reports, IDocumentRenderer renderer, IPdfRenderer pdf,
+        CancellationToken ct)
     {
         var format = (p.Format ?? "json").Trim().ToLowerInvariant();
         if (!ReportService.Formats.Contains(format))
         {
             return ReportingErrors.InvalidFormat.ToProblem();
+        }
+
+        if (format == "pdf" && !pdf.IsAvailable)
+        {
+            return PdfNotConfigured();
         }
 
         var authorized = await reports.AuthorizeAsync(area, report, ct);
@@ -176,10 +207,27 @@ public sealed class ReportingModule : IErpModule
                 return Results.Content(renderer.RenderReport(table, context), renderer.ContentType);
             }
 
+            case "pdf":
+            {
+                var context = await reports.RenderContextAsync(arabic, null, ct);
+                http.Response.Headers.ContentDisposition = $"inline; filename=\"{fileName}.pdf\"";
+                return Results.File(await pdf.RenderAsync(renderer.RenderReport(table, context), ct), PdfContentType);
+            }
+
             default:
                 return Results.Ok(ReportService.ToDto(run.Value));
         }
     }
+
+    private const string PdfContentType = "application/pdf";
+
+    /// <summary>501 when no PDF engine is configured (Pdf:GotenbergUrl empty) — HTML output stays available.</summary>
+    private static IResult PdfNotConfigured() => Results.Problem(
+        title: "PDF output is not configured",
+        detail: "This installation has no PDF engine. Use format=html, or configure Pdf:GotenbergUrl.",
+        statusCode: StatusCodes.Status501NotImplemented,
+        type: "https://errors.erp.local/reporting.pdf-not-configured",
+        extensions: new Dictionary<string, object?> { ["code"] = "reporting.pdf-not-configured" });
 
     private static bool IsArabic(string? lang, HttpContext http)
     {

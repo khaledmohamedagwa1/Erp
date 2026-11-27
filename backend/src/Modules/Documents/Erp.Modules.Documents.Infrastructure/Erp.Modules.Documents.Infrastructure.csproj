@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Update="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Erp.Modules.Documents.Application/Erp.Modules.Documents.Application.csproj" />
+    <ProjectReference Include="../../../BuildingBlocks/Erp.Web/Erp.Web.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" />
+    <PackageReference Include="AWSSDK.S3" />
+  </ItemGroup>
+</Project>

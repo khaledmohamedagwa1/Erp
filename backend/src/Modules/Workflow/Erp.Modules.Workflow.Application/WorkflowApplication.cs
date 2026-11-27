@@ -2,6 +2,7 @@ using System.Text.Json;
 using Erp.Application.Abstractions;
 using Erp.Application.Messaging;
 using Erp.Application.Paging;
+using Erp.Modules.Documents.Contracts;
 using Erp.Modules.Identity.Contracts;
 using Erp.Modules.Organization.Contracts;
 using Erp.Modules.Tax.Contracts;
@@ -582,7 +583,10 @@ public sealed class EscalateOverdueHandler(IWorkflowDbContext db, ITenantContext
 
 // ---------- Notifications ----------
 
-/// <summary>Emails the approvers of a step when it is assigned (submission, next step, delegation, escalation). At most once per event.</summary>
+/// <summary>
+/// Notifies the approvers of a step when it is assigned (submission, next step, delegation, escalation): an in-app
+/// notification (written in this handler's transaction) and an email. At most once per event.
+/// </summary>
 public sealed class ApprovalStepAssignedNotifier(
     IUnitOfWork unitOfWork,
     IInbox inbox,
@@ -590,7 +594,8 @@ public sealed class ApprovalStepAssignedNotifier(
     IWorkflowDbContext db,
     ITenantContext tenant,
     IUserDirectory users,
-    INotificationSender sender) : InboxIntegrationEventHandler<ApprovalStepAssigned>(unitOfWork, inbox, message)
+    INotificationSender sender,
+    INotificationPublisher inApp) : InboxIntegrationEventHandler<ApprovalStepAssigned>(unitOfWork, inbox, message)
 {
     protected override async Task HandleOnceAsync(ApprovalStepAssigned integrationEvent, CancellationToken cancellationToken)
     {
@@ -615,6 +620,13 @@ public sealed class ApprovalStepAssignedNotifier(
                 recipients[user.Id] = user;
             }
         }
+
+        await inApp.PublishAsync(recipients.Keys.ToList(), new InAppNotification(
+            "workflow.approval-requested",
+            $"Approval needed: {instance.DocumentNumber}",
+            $"{instance.DocumentType} for {instance.Amount:N2} {instance.Currency}, step {step.Sequence} of {instance.Steps.Count}.",
+            "/approvals",
+            instance.CompanyId), cancellationToken);
 
         foreach (var user in recipients.Values)
         {

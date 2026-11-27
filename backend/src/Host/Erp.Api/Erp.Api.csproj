@@ -16,6 +16,7 @@
     <ProjectReference Include="../../Modules/Pos/Erp.Modules.Pos.Infrastructure/Erp.Modules.Pos.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Inventory/Erp.Modules.Inventory.Infrastructure/Erp.Modules.Inventory.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Workflow/Erp.Modules.Workflow.Infrastructure/Erp.Modules.Workflow.Infrastructure.csproj" />
+    <ProjectReference Include="../../Modules/Documents/Erp.Modules.Documents.Infrastructure/Erp.Modules.Documents.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Reporting/Erp.Modules.Reporting.Infrastructure/Erp.Modules.Reporting.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Manufacturing/Erp.Modules.Manufacturing.Infrastructure/Erp.Modules.Manufacturing.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/FixedAssets/Erp.Modules.FixedAssets.Infrastructure/Erp.Modules.FixedAssets.Infrastructure.csproj" />

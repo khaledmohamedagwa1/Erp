@@ -86,6 +86,9 @@ public sealed class ErpApiFixture : IAsyncLifetime
 
     public WebApplicationFactory<Program> Factory => _factory!;
 
+    /// <summary>Local attachment store for this run (outside the repository); deleted on dispose.</summary>
+    public string AttachmentRoot { get; } = Path.Combine(Path.GetTempPath(), "erp-test-attachments-" + Guid.NewGuid().ToString("N")[..12]);
+
     public async ValueTask InitializeAsync()
     {
         var server = Environment.GetEnvironmentVariable("ERP_TEST_SQL");
@@ -108,6 +111,7 @@ public sealed class ErpApiFixture : IAsyncLifetime
             builder.UseSetting("RateLimiting:AuthPerMinute", "10000");
             builder.UseSetting("Serilog:MinimumLevel:Default", "Warning");
             builder.UseSetting("OpenApi:Enabled", "true");
+            builder.UseSetting("Documents:Attachments:LocalRoot", AttachmentRoot);
             builder.UseSetting("Hosting:CorsAllowedOrigins:0", AllowedOrigin);            builder.ConfigureTestServices(services =>
             {
                 services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedRecorder>();
@@ -126,6 +130,11 @@ public sealed class ErpApiFixture : IAsyncLifetime
         if (_factory is not null)
         {
             await _factory.DisposeAsync();
+        }
+
+        if (Directory.Exists(AttachmentRoot))
+        {
+            Directory.Delete(AttachmentRoot, recursive: true);
         }
 
         if (_container is not null)

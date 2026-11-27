@@ -63,6 +63,26 @@ app.kubernetes.io/component: {{ .component }}
   mountPath: /tmp
 {{- end -}}
 
+{{/* Attachment store (API pods only, local storage). */}}
+{{- define "erp.attachmentVolume" -}}
+{{- if ne (lower .Values.attachments.storage) "s3" }}
+- name: files
+  {{- if .Values.attachments.persistence.existingClaim }}
+  persistentVolumeClaim:
+    claimName: {{ .Values.attachments.persistence.existingClaim }}
+  {{- else }}
+  emptyDir: {}
+  {{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "erp.attachmentMount" -}}
+{{- if ne (lower .Values.attachments.storage) "s3" }}
+- name: files
+  mountPath: /var/lib/erp/files
+{{- end }}
+{{- end -}}
+
 {{- define "erp.probes" -}}
 startupProbe:
   httpGet: { path: /health/live, port: http }

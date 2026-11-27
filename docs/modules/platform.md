@@ -62,7 +62,18 @@ themselves.
 `INotificationSender.SendEmailAsync`. Default implementation logs recipient and subject only. Enable SMTP with
 `Notifications:Smtp:Enabled=true` plus `Host`, `Port`, `EnableSsl`, `UserName`, `Password`, `From` (secrets via environment
 variables or a secret store). Sent today (from the outbox after commit, via inbox consumers, so at most once per event):
-password reset by an administrator, MFA enabled/disabled.
+password reset by an administrator, MFA enabled/disabled, approval requests (Workflow).
+
+In-app notifications (the bell) and file attachments are provided by the Documents module — see [documents.md](documents.md).
+
+## PDF output
+
+`IPdfRenderer` (Erp.Application.Reporting) converts the self-contained HTML of `IDocumentRenderer` to PDF. The default
+`NullPdfRenderer` reports `IsAvailable = false`; endpoints then answer **501** `reporting.pdf-not-configured`. Setting
+`Pdf:GotenbergUrl` (e.g. `http://gotenberg:3000`) registers `GotenbergPdfRenderer`, which posts the HTML to Gotenberg's
+Chromium route (`Pdf:TimeoutSeconds`, default 30; `Pdf:MaxPdfBytes`, default 20 MB). Conversion runs only in read
+endpoints, never inside a database transaction. Available on `GET /api/v1/reports/documents/{type}/{id}?format=pdf`
+and `GET /api/v1/reports/{area}/{report}?format=pdf`.
 
 ## Transient database errors
 

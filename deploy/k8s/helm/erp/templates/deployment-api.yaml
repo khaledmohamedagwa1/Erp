@@ -56,8 +56,10 @@ spec:
             {{- toYaml .Values.api.resources | nindent 12 }}
           volumeMounts:
             {{- include "erp.volumeMounts" . | nindent 12 }}
+            {{- include "erp.attachmentMount" . | nindent 12 }}
       volumes:
         {{- include "erp.secretVolume" . | nindent 8 }}
+        {{- include "erp.attachmentVolume" . | nindent 8 }}
       {{- with .Values.api.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

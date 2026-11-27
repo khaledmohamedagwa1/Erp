@@ -101,6 +101,12 @@
     <Project Path="src/Modules/Tax/Erp.Modules.Tax.Domain/Erp.Modules.Tax.Domain.csproj" />
     <Project Path="src/Modules/Tax/Erp.Modules.Tax.Infrastructure/Erp.Modules.Tax.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/Documents/">
+    <Project Path="src/Modules/Documents/Erp.Modules.Documents.Application/Erp.Modules.Documents.Application.csproj" />
+    <Project Path="src/Modules/Documents/Erp.Modules.Documents.Contracts/Erp.Modules.Documents.Contracts.csproj" />
+    <Project Path="src/Modules/Documents/Erp.Modules.Documents.Domain/Erp.Modules.Documents.Domain.csproj" />
+    <Project Path="src/Modules/Documents/Erp.Modules.Documents.Infrastructure/Erp.Modules.Documents.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Modules/Workflow/">
     <Project Path="src/Modules/Workflow/Erp.Modules.Workflow.Application/Erp.Modules.Workflow.Application.csproj" />
     <Project Path="src/Modules/Workflow/Erp.Modules.Workflow.Contracts/Erp.Modules.Workflow.Contracts.csproj" />

@@ -20,7 +20,7 @@ public sealed class ReportService(
     IClock clock,
     ReportingOptions options)
 {
-    public static readonly IReadOnlyList<string> Formats = ["json", "csv", "xlsx", "html"];
+    public static readonly IReadOnlyList<string> Formats = ["json", "csv", "xlsx", "html", "pdf"];
 
     private const int MaxPageSize = 1000;
 

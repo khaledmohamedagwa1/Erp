@@ -20,6 +20,20 @@ data:
   {{- range $i, $origin := required "publicOrigins must list at least one https origin" .Values.publicOrigins }}
   Hosting__CorsAllowedOrigins__{{ $i }}: {{ $origin | quote }}
   {{- end }}
+  Documents__Attachments__MaxUploadBytes: {{ .Values.attachments.maxUploadBytes | int64 | quote }}
+  Documents__Attachments__Storage: {{ .Values.attachments.storage | quote }}
+  {{- if eq (lower .Values.attachments.storage) "s3" }}
+  Documents__Attachments__S3__Bucket: {{ required "attachments.s3.bucket is required when attachments.storage is S3" .Values.attachments.s3.bucket | quote }}
+  Documents__Attachments__S3__ServiceUrl: {{ .Values.attachments.s3.serviceUrl | quote }}
+  Documents__Attachments__S3__Region: {{ .Values.attachments.s3.region | quote }}
+  Documents__Attachments__S3__ForcePathStyle: {{ .Values.attachments.s3.forcePathStyle | quote }}
+  Documents__Attachments__S3__Prefix: {{ .Values.attachments.s3.prefix | quote }}
+  {{- else }}
+  Documents__Attachments__LocalRoot: /var/lib/erp/files/attachments
+  {{- end }}
+  {{- if .Values.pdf.gotenberg.enabled }}
+  Pdf__GotenbergUrl: {{ printf "http://%s-gotenberg:3000" (include "erp.fullname" .) | quote }}
+  {{- end }}
   {{- range $key, $value := .Values.config.extraEnv }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}

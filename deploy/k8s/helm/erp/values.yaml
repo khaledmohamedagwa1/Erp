@@ -113,7 +113,8 @@ ingress:
   enabled: true
   className: nginx
   annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    # Must allow attachments.maxUploadBytes (+ multipart overhead); the API still caps other requests at maxRequestBodyBytes.
+    nginx.ingress.kubernetes.io/proxy-body-size: 25m
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
   hosts:
     - host: erp.example.com
@@ -124,6 +125,33 @@ ingress:
     - secretName: erp-tls
       hosts: [erp.example.com]
   # The platform provisioning API should not be public; block it at the edge when your controller supports it.
+
+# File attachments (Documents module). Multipart uploads go to /api/v1/documents/attachments.
+attachments:
+  maxUploadBytes: 20971520
+  # Local: files on a volume mounted at /var/lib/erp/files (set persistence.existingClaim — ReadWriteMany when the API
+  # runs more than one replica; without a claim an emptyDir is used and attachments are LOST on restart).
+  # S3: an S3 bucket or S3-compatible store. Put Documents__Attachments__S3__AccessKey / __SecretKey in the Secret
+  # (key-per-file), or leave them out to use workload identity / the SDK default credential chain.
+  storage: Local
+  persistence:
+    existingClaim: ""
+  s3:
+    bucket: ""
+    serviceUrl: ""
+    region: us-east-1
+    forcePathStyle: true
+    prefix: ""
+
+# Optional PDF engine for ?format=pdf on printable documents and reports. Disabled = PDF requests answer 501.
+pdf:
+  gotenberg:
+    enabled: false
+    image: gotenberg/gotenberg:8
+    replicaCount: 1
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 1Gi }
 
 serviceAccount:
   create: true

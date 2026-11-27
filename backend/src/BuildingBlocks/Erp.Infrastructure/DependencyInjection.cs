@@ -37,6 +37,22 @@ public static class DependencyInjection
         services.AddScoped<ErpDbContextDependencies>();
         services.AddScoped<IDocumentNumberGenerator, DocumentNumberGenerator>();
         services.AddSingleton<Erp.Application.Reporting.IDocumentRenderer, Erp.Infrastructure.Rendering.HtmlDocumentRenderer>();
+        services.AddOptions<Erp.Infrastructure.Rendering.PdfOptions>().Bind(configuration.GetSection(Erp.Infrastructure.Rendering.PdfOptions.SectionName));
+        var gotenberg = configuration[$"{Erp.Infrastructure.Rendering.PdfOptions.SectionName}:GotenbergUrl"];
+        if (string.IsNullOrWhiteSpace(gotenberg))
+        {
+            services.AddSingleton<Erp.Application.Reporting.IPdfRenderer, Erp.Application.Reporting.NullPdfRenderer>();
+        }
+        else
+        {
+            var timeout = configuration.GetValue<int?>($"{Erp.Infrastructure.Rendering.PdfOptions.SectionName}:TimeoutSeconds") ?? 30;
+            services.AddHttpClient<Erp.Application.Reporting.IPdfRenderer, Erp.Infrastructure.Rendering.GotenbergPdfRenderer>(client =>
+            {
+                client.BaseAddress = Erp.Infrastructure.Rendering.GotenbergPdfRenderer.BaseAddress(gotenberg);
+                client.Timeout = TimeSpan.FromSeconds(Math.Max(1, timeout));
+            });
+        }
+
         services.AddScoped<IChangeTrackerReset>(sp => sp.GetRequiredService<ErpDbSession>());
         services.AddScoped<IInbox, SqlInbox>();
         services.AddScoped<IIdempotencyStore, SqlIdempotencyStore>();

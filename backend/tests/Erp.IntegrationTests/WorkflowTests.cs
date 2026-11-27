@@ -125,6 +125,15 @@ public class WorkflowTests(ErpApiFixture fixture)
         RecordingNotificationSender.Sent.ShouldContain(m => m.To == s.Fm1.Email && m.Subject.Contains(documentNumber));
         RecordingNotificationSender.Sent.ShouldNotContain(m => m.To == s.Fm2.Email && m.Subject.Contains(documentNumber));
 
+        // ...and get an in-app notification linking to the approvals inbox (only the approver, not the requester).
+        var bell = await (await s.Fm1.Client.GetAsync("/api/v1/notifications?unreadOnly=true", TestContext.Current.CancellationToken))
+            .Content.ReadFromJsonAsync<JsonElement>(Ct);
+        var notification = bell.GetProperty("items").EnumerateArray().Single(n => n.GetProperty("title").GetString()!.Contains(documentNumber));
+        notification.GetProperty("category").GetString().ShouldBe("workflow.approval-requested");
+        notification.GetProperty("link").GetString().ShouldBe("/approvals");
+        notification.GetProperty("companyId").GetGuid().ShouldBe(s.T.CompanyId);
+        (await (await s.Fm2.Client.GetAsync("/api/v1/notifications", Ct)).Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("totalCount").GetInt32().ShouldBe(0);
+
         // The approver sees it; the requester (also a Finance Manager) does not, and cannot approve it.
         var inbox = await InboxAsync(s, s.Fm1);
         inbox.EnumerateArray().Single().GetProperty("instanceId").GetGuid().ShouldBe(instanceId);

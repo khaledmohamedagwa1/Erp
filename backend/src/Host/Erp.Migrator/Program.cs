@@ -17,6 +17,7 @@ using Erp.Modules.Organization.Infrastructure;
 using Erp.Modules.Parties.Infrastructure;
 using Erp.Modules.Reporting.Infrastructure;
 using Erp.Modules.Workflow.Infrastructure;
+using Erp.Modules.Documents.Infrastructure;
 using Erp.Web;
 using Erp.Web.Modules;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,7 +35,7 @@ var builder = Host.CreateApplicationBuilder(args);
 
 // Secret files (Docker/Kubernetes secrets): /run/secrets/ConnectionStrings__Erp becomes ConnectionStrings:Erp.
 builder.Configuration.AddKeyPerFile(Environment.GetEnvironmentVariable("ERP_SECRETS_DIR") ?? "/run/secrets", optional: true);
-IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule(), new PartiesModule(), new TaxModule(), new CatalogModule(), new AccountingModule(), new FinanceModule(), new InventoryModule(), new WorkflowModule(), new ManufacturingModule(), new ProcurementModule(), new SalesModule(), new FixedAssetsModule(), new PosModule(), new ReportingModule()];
+IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule(), new PartiesModule(), new TaxModule(), new CatalogModule(), new AccountingModule(), new FinanceModule(), new InventoryModule(), new WorkflowModule(), new ManufacturingModule(), new ProcurementModule(), new SalesModule(), new FixedAssetsModule(), new PosModule(), new ReportingModule(), new DocumentsModule()];
 builder.Services.AddErpPlatform(builder.Configuration, modules);
 using var host = builder.Build();
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Erp.Migrator");

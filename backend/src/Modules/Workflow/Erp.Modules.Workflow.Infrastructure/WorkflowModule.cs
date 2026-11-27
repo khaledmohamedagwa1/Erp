@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -100,6 +101,7 @@ public sealed class WorkflowModule : IErpModule
         // Registered with AddScoped (not TryAdd): wins over modules' TryAddScoped<IApprovalService, NoApprovalRequired>.
         services.AddScoped<IApprovalService, ApprovalService>();
         services.AddScoped<EligibilityResolver>();
+        services.TryAddScoped<Erp.Modules.Documents.Contracts.INotificationPublisher, Erp.Modules.Documents.Contracts.NoInAppNotifications>();
         services.AddScoped<IIntegrationEventHandler<ApprovalStepAssigned>, ApprovalStepAssignedNotifier>();
         services.AddHandlersFromAssembly(typeof(IWorkflowDbContext).Assembly);
         services.AddSingleton(new EventAssembly(typeof(ApprovalInstance).Assembly));

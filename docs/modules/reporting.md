@@ -7,9 +7,9 @@ Schema `reporting` (migration order 160), module code `reporting`, core (always 
 | Method | Route | Purpose |
 |---|---|---|
 | GET | `/api/v1/reports` | Catalogue of reports the user may run (permission granted, source module installed and enabled): area, key, titles, source, filters, formats, href |
-| GET | `/api/v1/reports/{area}/{report}` | Query: `from`, `to`, `branchId`, `warehouseId`, `customerId`, `supplierId`, `productId`, `categoryId` (incl. sub-categories), `groupBy` (day/month/year), `days`, `batchNumber`, `page`, `pageSize` (≤ 1000), `format=json\|csv\|xlsx\|html`, `lang=en\|ar` (default from Accept-Language) |
+| GET | `/api/v1/reports/{area}/{report}` | Query: `from`, `to`, `branchId`, `warehouseId`, `customerId`, `supplierId`, `productId`, `categoryId` (incl. sub-categories), `groupBy` (day/month/year), `days`, `batchNumber`, `page`, `pageSize` (≤ 1000), `format=json\|csv\|xlsx\|html\|pdf` (pdf: 501 `reporting.pdf-not-configured` unless `Pdf:GotenbergUrl` is set), `lang=en\|ar` (default from Accept-Language) |
 | GET | `/api/v1/reports/financial/{key}` | 302 redirect to the Accounting statement with the same query string |
-| GET | `/api/v1/reports/documents/{type}/{id}` | Printable HTML of posted documents: `sales-invoice`, `credit-note`, `purchase-order`, `goods-receipt`, `voucher`; `lang=ar` renders right-to-left |
+| GET | `/api/v1/reports/documents/{type}/{id}` | Printable HTML of posted documents: `sales-invoice`, `credit-note`, `purchase-order`, `goods-receipt`, `voucher`; `lang=ar` renders right-to-left; `format=html` (default) or `pdf` (needs a PDF engine, else 501) |
 | GET / POST | `/api/v1/reports/views` | List (`reportKey=…`) / create `{ name, reportKey, filters: {…} }` |
 | DELETE | `/api/v1/reports/views/{id}` | Delete one of your own views |
 
