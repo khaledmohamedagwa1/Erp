@@ -5,6 +5,7 @@ using Erp.Infrastructure.Tenancy;
 using Erp.Modules.Configuration.Infrastructure;
 using Erp.Modules.Identity.Infrastructure;
 using Erp.Modules.Organization.Infrastructure;
+using Erp.Modules.Parties.Infrastructure;
 using Erp.Web;
 using Erp.Web.Modules;
 using Microsoft.Extensions.Options;
@@ -31,7 +32,7 @@ builder.Services.AddSerilog((services, logger) =>
 });
 
 // ---- Modules: the platform is composed from these (order = migration order is set per module) ----
-IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule()];
+IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule(), new PartiesModule()];
 builder.Services.AddErpPlatform(builder.Configuration, modules);
 
 // ---- Process role: api | worker | all (same image, different responsibilities) ----

@@ -29,6 +29,12 @@
     <Project Path="src/Modules/Organization/Erp.Modules.Organization.Domain/Erp.Modules.Organization.Domain.csproj" />
     <Project Path="src/Modules/Organization/Erp.Modules.Organization.Infrastructure/Erp.Modules.Organization.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/Parties/">
+    <Project Path="src/Modules/Parties/Erp.Modules.Parties.Application/Erp.Modules.Parties.Application.csproj" />
+    <Project Path="src/Modules/Parties/Erp.Modules.Parties.Contracts/Erp.Modules.Parties.Contracts.csproj" />
+    <Project Path="src/Modules/Parties/Erp.Modules.Parties.Domain/Erp.Modules.Parties.Domain.csproj" />
+    <Project Path="src/Modules/Parties/Erp.Modules.Parties.Infrastructure/Erp.Modules.Parties.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Erp.ArchitectureTests/Erp.ArchitectureTests.csproj" />
     <Project Path="tests/Erp.IntegrationTests/Erp.IntegrationTests.csproj" />
