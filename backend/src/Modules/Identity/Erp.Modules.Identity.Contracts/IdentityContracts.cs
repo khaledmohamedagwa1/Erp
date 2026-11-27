@@ -18,3 +18,15 @@ public static class IdentityPermissions
     public const string RoleRead = "identity.role.read";
     public const string RoleManage = "identity.role.manage";
 }
+
+public sealed record UserSummary(Guid Id, string Email, string DisplayName, bool IsActive);
+
+/// <summary>Read access to users and role membership for other modules (e.g. approval routing and notifications).</summary>
+public interface IUserDirectory
+{
+    Task<IReadOnlyCollection<Guid>> GetRoleIdsAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<UserSummary>> GetUsersInRoleAsync(Guid roleId, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<UserSummary>> GetUsersAsync(IReadOnlyCollection<Guid> userIds, CancellationToken cancellationToken = default);
+}

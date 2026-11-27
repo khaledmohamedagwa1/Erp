@@ -90,6 +90,7 @@ public sealed class IdentityModule : IErpModule
         services.AddScoped<IUserAccessService, UserAccessService>();
         services.AddScoped<IPermissionService, PermissionService>();
         services.AddScoped<IIdentityProvisioning, IdentityProvisioning>();
+        services.AddScoped<IUserDirectory, UserDirectory>();
         services.AddScoped<ISessionIssuer, SessionIssuer>();
         services.AddScoped<SessionRevoker>();
         services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();

@@ -551,6 +551,23 @@ public sealed class ListPermissionsHandler(IPermissionCatalog catalog) : IQueryH
     }
 }
 
+// ---------- Directory contract ----------
+public sealed class UserDirectory(IIdentityDbContext db) : IUserDirectory
+{
+    public async Task<IReadOnlyCollection<Guid>> GetRoleIdsAsync(Guid userId, CancellationToken cancellationToken = default) =>
+        await db.Users.AsNoTracking().Where(u => u.Id == userId && u.IsActive)
+            .SelectMany(u => u.Roles.Select(r => r.RoleId)).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<UserSummary>> GetUsersInRoleAsync(Guid roleId, CancellationToken cancellationToken = default) =>
+        await db.Users.AsNoTracking().Where(u => u.IsActive && u.Roles.Any(r => r.RoleId == roleId))
+            .OrderBy(u => u.DisplayName)
+            .Select(u => new UserSummary(u.Id, u.Email, u.DisplayName, u.IsActive)).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<UserSummary>> GetUsersAsync(IReadOnlyCollection<Guid> userIds, CancellationToken cancellationToken = default) =>
+        await db.Users.AsNoTracking().Where(u => userIds.Contains(u.Id))
+            .Select(u => new UserSummary(u.Id, u.Email, u.DisplayName, u.IsActive)).ToListAsync(cancellationToken);
+}
+
 // ---------- Provisioning contract ----------
 public sealed class IdentityProvisioning(IIdentityDbContext db, IPasswordHasher hasher, IPermissionCatalog catalog, IIdentityCache cache)
     : IIdentityProvisioning

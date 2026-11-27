@@ -2,6 +2,13 @@ using Erp.SharedKernel.Domain;
 
 namespace Erp.Modules.Workflow.Contracts;
 
+public static class WorkflowPermissions
+{
+    public const string DefinitionRead = "workflow.definition.read";
+    public const string DefinitionManage = "workflow.definition.manage";
+    public const string Approve = "workflow.approve";
+}
+
 /// <summary>Document types that can go through approval. Modules use these exact strings.</summary>
 public static class ApprovalDocumentTypes
 {

@@ -51,6 +51,10 @@ public interface ITenantDirectory
     Task<TenantInfo?> FindByIdAsync(Guid tenantId, CancellationToken cancellationToken = default);
 
     Task<TenantInfo?> FindByCodeAsync(string code, CancellationToken cancellationToken = default);
+
+    /// <summary>Every active tenant. Used by background jobs that run per tenant (e.g. approval escalation).</summary>
+    Task<IReadOnlyList<TenantInfo>> ListActiveAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<TenantInfo>>([]);
 }
 
 public sealed record CompanyAccess(Guid CompanyId, IReadOnlyCollection<Guid> BranchIds, IReadOnlyCollection<Guid> WarehouseIds)

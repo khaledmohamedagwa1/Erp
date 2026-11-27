@@ -98,6 +98,7 @@ public sealed class ErpApiFixture : IAsyncLifetime
                 services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedRecorder>();
                 services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedInboxCounter>();
                 services.AddSingleton<INotificationSender, RecordingNotificationSender>();
+                services.AddScoped<IIntegrationEventHandler<Erp.Modules.Workflow.Contracts.ApprovalCompleted>, ApprovalCompletedRecorder>();
             });
         });
 
