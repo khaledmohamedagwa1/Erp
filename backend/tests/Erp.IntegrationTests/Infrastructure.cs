@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Erp.Application.Abstractions;
 using Erp.Infrastructure.Database;
+using Erp.Modules.Manufacturing.Contracts;
 using Erp.Modules.Organization.Domain;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -15,6 +16,17 @@ using Xunit;
 [assembly: AssemblyFixture(typeof(Erp.IntegrationTests.ErpApiFixture))]
 
 namespace Erp.IntegrationTests;
+
+/// <summary>MRP demand injected by tests, keyed by company (stands in for the not-yet-wired sales source).</summary>
+public sealed class TestMrpDemandSource : IMrpDemandSource
+{
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, IReadOnlyList<MrpDemand>> Demand = new();
+
+    public string Name => "test-demand";
+
+    public Task<IReadOnlyList<MrpDemand>> GetDemandAsync(Guid companyId, DateOnly horizonEnd, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Demand.TryGetValue(companyId, out var demand) ? demand : (IReadOnlyList<MrpDemand>)[]);
+}
 
 /// <summary>Records CompanyCreated events delivered from the outbox.</summary>
 public sealed class CompanyCreatedRecorder : IIntegrationEventHandler<CompanyCreated>
@@ -98,6 +110,7 @@ public sealed class ErpApiFixture : IAsyncLifetime
                 services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedRecorder>();
                 services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedInboxCounter>();
                 services.AddSingleton<INotificationSender, RecordingNotificationSender>();
+                services.AddScoped<IMrpDemandSource, TestMrpDemandSource>();
             });
         });
 

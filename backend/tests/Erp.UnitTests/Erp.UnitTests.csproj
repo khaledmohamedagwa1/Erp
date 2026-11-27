@@ -21,6 +21,8 @@
       <ProjectReference Include="../../src/Modules/Finance/Erp.Modules.Finance.Domain/Erp.Modules.Finance.Domain.csproj" />
     <ProjectReference Include="../../src/Modules/Finance/Erp.Modules.Finance.Application/Erp.Modules.Finance.Application.csproj" />
     <ProjectReference Include="../../src/Modules/Inventory/Erp.Modules.Inventory.Domain/Erp.Modules.Inventory.Domain.csproj" />
+    <ProjectReference Include="../../src/Modules/Manufacturing/Erp.Modules.Manufacturing.Domain/Erp.Modules.Manufacturing.Domain.csproj" />
+    <ProjectReference Include="../../src/Modules/Manufacturing/Erp.Modules.Manufacturing.Application/Erp.Modules.Manufacturing.Application.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
