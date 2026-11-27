@@ -41,6 +41,8 @@ public sealed class ReportParameters
 
     public string? BatchNumber { get; set; }
 
+    public Guid? SalespersonId { get; set; }
+
     public int? Page { get; set; }
 
     public int? PageSize { get; set; }
@@ -52,7 +54,7 @@ public sealed class ReportParameters
     public string? Lang { get; set; }
 
     public ReportRequest ToRequest() =>
-        new(From, To, BranchId, WarehouseId, CustomerId, SupplierId, ProductId, CategoryId, GroupBy, Days, BatchNumber, Page ?? 1, PageSize ?? 100);
+        new(From, To, BranchId, WarehouseId, CustomerId, SupplierId, ProductId, CategoryId, GroupBy, Days, BatchNumber, Page ?? 1, PageSize ?? 100, SalespersonId);
 }
 
 public sealed record CreateSavedViewRequest(string Name, string ReportKey, System.Text.Json.JsonElement? Filters);
@@ -100,6 +102,7 @@ public sealed class ReportingModule : IErpModule
         services.AddScoped<IReportArea, ManufacturingReports>();
         services.AddScoped<IReportArea, FinancialReports>();
         services.AddScoped<IReportArea, TaxReports>();
+        services.AddScoped<IReportArea, PeopleReports>();
         services.AddScoped<ReportService>();
         services.AddScoped<DocumentPrinting>();
         services.AddHandlersFromAssembly(typeof(IReportingDbContext).Assembly);

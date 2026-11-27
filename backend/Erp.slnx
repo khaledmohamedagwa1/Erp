@@ -83,6 +83,12 @@
     <Project Path="src/Modules/Procurement/Erp.Modules.Procurement.Domain/Erp.Modules.Procurement.Domain.csproj" />
     <Project Path="src/Modules/Procurement/Erp.Modules.Procurement.Infrastructure/Erp.Modules.Procurement.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/People/">
+    <Project Path="src/Modules/People/Erp.Modules.People.Application/Erp.Modules.People.Application.csproj" />
+    <Project Path="src/Modules/People/Erp.Modules.People.Contracts/Erp.Modules.People.Contracts.csproj" />
+    <Project Path="src/Modules/People/Erp.Modules.People.Domain/Erp.Modules.People.Domain.csproj" />
+    <Project Path="src/Modules/People/Erp.Modules.People.Infrastructure/Erp.Modules.People.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Modules/Import/">
     <Project Path="src/Modules/Import/Erp.Modules.Import.Application/Erp.Modules.Import.Application.csproj" />
     <Project Path="src/Modules/Import/Erp.Modules.Import.Contracts/Erp.Modules.Import.Contracts.csproj" />

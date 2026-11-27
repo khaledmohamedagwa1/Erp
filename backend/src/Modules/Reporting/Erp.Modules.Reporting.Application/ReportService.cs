@@ -171,6 +171,6 @@ public sealed class ReportService(
         var page = Math.Max(1, r.Page);
         var pageSize = Math.Clamp(r.PageSize, 1, MaxPageSize);
         return new ReportQuery(from, to, today, r.BranchId, r.WarehouseId, r.CustomerId, r.SupplierId, products, r.GroupBy?.Trim(), r.Days,
-            string.IsNullOrWhiteSpace(r.BatchNumber) ? null : r.BatchNumber.Trim(), page, pageSize, forExport, ExportCap, arabic);
+            string.IsNullOrWhiteSpace(r.BatchNumber) ? null : r.BatchNumber.Trim(), page, pageSize, forExport, ExportCap, arabic, r.SalespersonId);
     }
 }

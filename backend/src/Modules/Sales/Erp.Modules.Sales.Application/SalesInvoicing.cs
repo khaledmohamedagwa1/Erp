@@ -31,7 +31,8 @@ public sealed record CreateInvoiceCommand(
     string? Reference,
     string? Notes,
     IReadOnlyList<SalesLineRequest>? Lines,
-    IReadOnlyList<SourceLineRequest>? SourceLines) : ICommand<SalesDocumentDto>;
+    IReadOnlyList<SourceLineRequest>? SourceLines,
+    Guid? SalespersonId = null) : ICommand<SalesDocumentDto>;
 
 public sealed class CreateInvoiceValidator : AbstractValidator<CreateInvoiceCommand>
 {
@@ -47,7 +48,7 @@ public sealed class CreateInvoiceValidator : AbstractValidator<CreateInvoiceComm
     }
 }
 
-public sealed record InvoiceDraft(SalesSetting Setting, Guid? PriceListId, Guid? SalesOrderId, Guid? DeliveryNoteId, PricedLines Priced);
+public sealed record InvoiceDraft(SalesSetting Setting, Guid? PriceListId, Guid? SalesOrderId, Guid? DeliveryNoteId, PricedLines Priced, Guid? SourceSalespersonId = null);
 
 /// <summary>Builds and prices invoice lines for the three creation modes (shared by create and preview).</summary>
 public sealed class InvoiceBuilder(ISalesDbContext db, SalesScope scope, SalesPricing pricing, IPolicyReader policies)
@@ -76,7 +77,9 @@ public sealed class InvoiceBuilder(ISalesDbContext db, SalesScope scope, SalesPr
 
             var inputs = lines.Value.Select(x => new LineInput(x.Line.ProductId, x.Line.VariantId, x.Line.UomId, x.Quantity, x.Line.UnitPrice, x.Line.DiscountPercent,
                 x.Line.SourceLineUid, x.Line.Uid, TrustedUnitPrice: true, x.Line.BatchNumber)).ToList();
-            return await PriceAsync(delivery.CustomerId, delivery.WarehouseId, c.Date, delivery.PriceListId, delivery.TaxInclusive, delivery.SalesOrderId, delivery.Id, inputs, ct);
+            var fromDelivery = await PriceAsync(delivery.CustomerId, delivery.WarehouseId, c.Date, delivery.PriceListId, delivery.TaxInclusive, delivery.SalesOrderId, delivery.Id,
+                inputs, ct);
+            return fromDelivery.IsFailure ? fromDelivery : fromDelivery.Value with { SourceSalespersonId = delivery.SalespersonId };
         }
 
         if (c.SalesOrderId is { } orderId)
@@ -107,7 +110,8 @@ public sealed class InvoiceBuilder(ISalesDbContext db, SalesScope scope, SalesPr
 
             var inputs = lines.Value.Select(x => new LineInput(x.Line.ProductId, x.Line.VariantId, x.Line.UomId, x.Quantity, x.Line.UnitPrice, x.Line.DiscountPercent,
                 x.Line.Uid, TrustedUnitPrice: true)).ToList();
-            return await PriceAsync(order.CustomerId, order.WarehouseId, c.Date, order.PriceListId, order.TaxInclusive, order.Id, null, inputs, ct);
+            var fromOrder = await PriceAsync(order.CustomerId, order.WarehouseId, c.Date, order.PriceListId, order.TaxInclusive, order.Id, null, inputs, ct);
+            return fromOrder.IsFailure ? fromOrder : fromOrder.Value with { SourceSalespersonId = order.SalespersonId };
         }
 
         var free = SalesHandlerHelpers.ToInputs(c.Lines ?? []);
@@ -164,7 +168,7 @@ public sealed class InvoiceBuilder(ISalesDbContext db, SalesScope scope, SalesPr
     }
 }
 
-public sealed class CreateInvoiceHandler(ISalesDbContext db, InvoiceBuilder builder) : ICommandHandler<CreateInvoiceCommand, SalesDocumentDto>
+public sealed class CreateInvoiceHandler(ISalesDbContext db, InvoiceBuilder builder, SalespersonResolver salespersons) : ICommandHandler<CreateInvoiceCommand, SalesDocumentDto>
 {
     public async Task<Result<SalesDocumentDto>> Handle(CreateInvoiceCommand c, CancellationToken ct)
     {
@@ -174,11 +178,18 @@ public sealed class CreateInvoiceHandler(ISalesDbContext db, InvoiceBuilder buil
             return draft.Error;
         }
 
-        var (s, priceList, orderId, deliveryId, priced) = draft.Value;
+        var (s, priceList, orderId, deliveryId, priced, sourceSalesperson) = draft.Value;
+        var salesperson = await salespersons.ResolveAsync(c.SalespersonId, sourceSalesperson, s.Customer, ct);
+        if (salesperson.IsFailure)
+        {
+            return salesperson.Error;
+        }
+
         try
         {
             var invoice = new SalesInvoice(s.CompanyId, s.LegalEntityId, s.BranchId, s.WarehouseId, s.Customer.Id, s.Customer.PostingGroup, s.Currency, s.Rate, priceList,
                 priced.TaxInclusive, c.Date, orderId, deliveryId, s.Customer.PaymentTermsId, c.Reference, c.Notes, priced.Lines);
+            invoice.AssignSalesperson(salesperson.Value);
             db.Invoices.Add(invoice);
             await db.SaveChangesAsync(ct);
             return SalesMapping.ToDto(invoice);
@@ -204,7 +215,7 @@ public sealed class PreviewInvoiceHandler(InvoiceBuilder builder) : IQueryHandle
             return draft.Error;
         }
 
-        var (s, priceList, orderId, deliveryId, priced) = draft.Value;
+        var (s, priceList, orderId, deliveryId, priced, _) = draft.Value;
         try
         {
             var invoice = new SalesInvoice(s.CompanyId, s.LegalEntityId, s.BranchId, s.WarehouseId, s.Customer.Id, s.Customer.PostingGroup, s.Currency, s.Rate, priceList,
@@ -417,7 +428,7 @@ public sealed class PostInvoiceHandler(
             .Add(PostingRoles.CustomerReceivable, invoice.GrossTotal, 0, new PostingContext(PartyPostingGroup: invoice.CustomerPostingGroup), invoice.CustomerId, $"Invoice {number}")
             .AddRevenueAndTax(invoice.Lines, credit: true, PostingRoles.SalesRevenue, PostingRoles.ServiceRevenue);
         var postedJournal = await journals.PostAsync(new JournalRequest(invoice.LegalEntityId, invoice.DocumentDate, SourceModules.Sales, SalesDocumentTypes.Invoice,
-            invoice.Id, "invoice", $"Sales invoice {number}", invoice.Currency, invoice.ExchangeRate, journal.Lines), ct);
+            invoice.Id, "invoice", $"Sales invoice {number}", invoice.Currency, invoice.ExchangeRate, journal.Lines, invoice.BranchId), ct);
         if (postedJournal.IsFailure)
         {
             return postedJournal.Error;
@@ -619,7 +630,7 @@ public sealed class CreateReturnHandler(ISalesDbContext db) : ICommandHandler<Cr
             return SalesAppErrors.NotFound;
         }
 
-        if (!invoice.IsPosted)
+        if (!invoice.IsPosted || invoice.Status == SalesInvoiceStatus.Closed)
         {
             return SalesErrors.InvalidTransition("sales invoice", invoice.Status.ToString(), "returned");
         }
@@ -741,7 +752,7 @@ public sealed class PostReturnHandler(
             .AddRevenueAndTax(salesReturn.Lines, credit: false, PostingRoles.SalesReturns, PostingRoles.SalesReturns)
             .Add(PostingRoles.CustomerReceivable, 0, salesReturn.GrossTotal, new PostingContext(PartyPostingGroup: salesReturn.CustomerPostingGroup), salesReturn.CustomerId, $"Credit note {number}");
         var postedJournal = await journals.PostAsync(new JournalRequest(salesReturn.LegalEntityId, salesReturn.DocumentDate, SourceModules.Sales, SalesDocumentTypes.Return,
-            salesReturn.Id, "return", $"Sales return {number}", salesReturn.Currency, salesReturn.ExchangeRate, journal.Lines), ct);
+            salesReturn.Id, "return", $"Sales return {number}", salesReturn.Currency, salesReturn.ExchangeRate, journal.Lines, salesReturn.BranchId), ct);
         if (postedJournal.IsFailure)
         {
             return postedJournal.Error;

@@ -20,6 +20,9 @@ public interface ICatalogReportQueries
     /// <summary>Products in the category or any of its sub-categories.</summary>
     Task<IReadOnlyCollection<Guid>> GetProductIdsInCategoryAsync(Guid categoryId, CancellationToken cancellationToken = default);
 
+    /// <summary>True when the category exists in the active company.</summary>
+    Task<bool> CategoryExistsAsync(Guid categoryId, CancellationToken cancellationToken = default);
+
     /// <summary>Unit codes by unit id (for printing).</summary>
     Task<IReadOnlyDictionary<Guid, string>> GetUnitCodesAsync(IReadOnlyCollection<Guid> uomIds, CancellationToken cancellationToken = default);
 }

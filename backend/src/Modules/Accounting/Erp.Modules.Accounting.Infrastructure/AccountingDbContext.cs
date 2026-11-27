@@ -18,6 +18,8 @@ public sealed class AccountingDbContext(DbContextOptions<AccountingDbContext> op
 
     public DbSet<CostCenter> CostCenters => Set<CostCenter>();
 
+    public DbSet<ProfitCenter> ProfitCenters => Set<ProfitCenter>();
+
     public DbSet<FiscalYear> FiscalYears => Set<FiscalYear>();
 
     public DbSet<JournalEntry> Journals => Set<JournalEntry>();
@@ -65,6 +67,18 @@ public sealed class AccountingDbContext(DbContextOptions<AccountingDbContext> op
             b.Property(x => x.Name).HasMaxLength(200).IsRequired();
             b.HasIndex(TenantIdProperty, nameof(CostCenter.CompanyId), nameof(CostCenter.Code)).IsUnique();
             b.HasOne<CostCenter>().WithMany().HasForeignKey(x => x.ParentId).OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<ProfitCenter>(b =>
+        {
+            b.ToTable("ProfitCenter");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.Code).HasMaxLength(20).IsRequired();
+            b.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            b.HasIndex(TenantIdProperty, nameof(ProfitCenter.CompanyId), nameof(ProfitCenter.Code)).IsUnique();
+            // A branch defaults to at most one profit center.
+            b.HasIndex(TenantIdProperty, nameof(ProfitCenter.CompanyId), nameof(ProfitCenter.BranchId)).IsUnique().HasFilter("[BranchId] IS NOT NULL");
         });
 
         modelBuilder.Entity<FiscalYear>(b =>
@@ -136,6 +150,7 @@ public sealed class AccountingDbContext(DbContextOptions<AccountingDbContext> op
             b.HasIndex(x => x.AccountId);
             b.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.NoAction);
             b.HasOne<CostCenter>().WithMany().HasForeignKey(x => x.CostCenterId).OnDelete(DeleteBehavior.NoAction);
+            b.HasOne<ProfitCenter>().WithMany().HasForeignKey(x => x.ProfitCenterId).OnDelete(DeleteBehavior.NoAction);
             b.ToTable(t =>
             {
                 t.HasCheckConstraint("CK_JournalLine_NonNegative", "[Debit] >= 0 AND [Credit] >= 0 AND [BaseDebit] >= 0 AND [BaseCredit] >= 0");

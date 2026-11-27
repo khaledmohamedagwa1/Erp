@@ -101,7 +101,7 @@ public sealed class ReceiptPosting(
         receipt.Complete(number, null);
         var journal = PosJournal.ForReceipt(receipt, await accounts.ResolveAsync(terminal, ct));
         var postedJournal = await journals.PostAsync(new JournalRequest(receipt.LegalEntityId, receipt.BusinessDate, SourceModules.Pos, docType, receipt.Id,
-            "receipt", $"{(sale ? "POS receipt" : "POS refund")} {number}", receipt.Currency, 1m, journal.Lines), ct);
+            "receipt", $"{(sale ? "POS receipt" : "POS refund")} {number}", receipt.Currency, 1m, journal.Lines, receipt.BranchId), ct);
         if (postedJournal.IsFailure)
         {
             return postedJournal.Error;
@@ -126,7 +126,8 @@ public sealed record SubmitReceiptCommand(
     Guid? CustomerId,
     IReadOnlyList<PosLineInput> Lines,
     IReadOnlyList<PosPaymentInput> Payments,
-    string? DeviceKey = null) : ICommand<ReceiptOutcome>;
+    string? DeviceKey = null,
+    Guid? SalespersonId = null) : ICommand<ReceiptOutcome>;
 
 public sealed class SubmitReceiptHandler(
     IPosDbContext db,
@@ -135,7 +136,8 @@ public sealed class SubmitReceiptHandler(
     IPriceListSnapshotQueries priceLists,
     IPartyQueries parties,
     ICurrentUser user,
-    IClock clock) : ICommandHandler<SubmitReceiptCommand, ReceiptOutcome>
+    IClock clock,
+    PosSalespersonResolver salespersons) : ICommandHandler<SubmitReceiptCommand, ReceiptOutcome>
 {
     public async Task<Result<ReceiptOutcome>> Handle(SubmitReceiptCommand c, CancellationToken ct)
     {
@@ -216,8 +218,15 @@ public sealed class SubmitReceiptHandler(
             payments.Add((new PaymentInput(method.Value, payment.Amount), payment.Reference));
         }
 
+        var salesperson = await salespersons.ResolveAsync(c.SalespersonId, customerId, user.UserId, ct);
+        if (salesperson.IsFailure)
+        {
+            return salesperson.Error;
+        }
+
         var receipt = new PosReceipt(terminal.CompanyId, terminal.LegalEntityId, terminal.BranchId, terminal.Id, shift.Value.Id, terminal.WarehouseId, c.ClientReceiptId,
             ReceiptKind.Sale, customerId, terminal.Currency, terminal.PriceListId, version, cart.Value.TaxInclusive, date, user.UserId, clock.UtcNow, null);
+        receipt.AssignSalesperson(salesperson.Value);
         try
         {
             receipt.SetLines(cart.Value.Lines);
@@ -310,6 +319,7 @@ public sealed class RefundReceiptHandler(IPosDbContext db, ReceiptPosting postin
         var refund = new PosReceipt(terminal.CompanyId, terminal.LegalEntityId, terminal.BranchId, terminal.Id, shift.Value.Id, terminal.WarehouseId, c.ClientReceiptId,
             ReceiptKind.Refund, original.CustomerId, original.Currency, original.PriceListId, null, original.TaxInclusive, shift.Value.BusinessDate, user.UserId,
             clock.UtcNow, original.Id);
+        refund.AssignSalesperson(original.SalespersonId);
         var costSources = new Dictionary<Guid, Guid?>();
         try
         {

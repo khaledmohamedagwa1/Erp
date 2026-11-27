@@ -602,6 +602,9 @@ namespace Erp.Modules.Accounting.Infrastructure.Migrations
                         .HasMaxLength(60)
                         .HasColumnType("nvarchar(60)");
 
+                    b.Property<Guid?>("ProfitCenterId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid?>("TaxCodeId")
                         .HasColumnType("uniqueidentifier");
 
@@ -619,6 +622,8 @@ namespace Erp.Modules.Accounting.Infrastructure.Migrations
                     b.HasIndex("CostCenterId");
 
                     b.HasIndex("JournalEntryId");
+
+                    b.HasIndex("ProfitCenterId");
 
                     b.HasIndex("TenantId");
 
@@ -732,6 +737,66 @@ namespace Erp.Modules.Accounting.Infrastructure.Migrations
                     b.ToTable("OpeningBalanceLine", "accounting");
                 });
 
+            modelBuilder.Entity("Erp.Modules.Accounting.Domain.ProfitCenter", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("BranchId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasPrecision(3)
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("ModifiedAtUtc")
+                        .HasPrecision(3)
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<Guid?>("ModifiedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("TenantId", "CompanyId", "BranchId")
+                        .IsUnique()
+                        .HasFilter("[BranchId] IS NOT NULL");
+
+                    b.HasIndex("TenantId", "CompanyId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("ProfitCenter", "accounting");
+                });
+
             modelBuilder.Entity("Erp.Modules.Accounting.Domain.Account", b =>
                 {
                     b.HasOne("Erp.Modules.Accounting.Domain.Account", null)
@@ -793,6 +858,11 @@ namespace Erp.Modules.Accounting.Infrastructure.Migrations
                         .HasForeignKey("JournalEntryId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.HasOne("Erp.Modules.Accounting.Domain.ProfitCenter", null)
+                        .WithMany()
+                        .HasForeignKey("ProfitCenterId")
+                        .OnDelete(DeleteBehavior.NoAction);
                 });
 
             modelBuilder.Entity("Erp.Modules.Accounting.Domain.OpeningBalanceLine", b =>

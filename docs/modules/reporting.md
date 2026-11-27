@@ -33,8 +33,10 @@ Checked on every request: 403 `forbidden`, 404 `module-disabled`, 404 `reporting
 ## Reports and their sources (functional currency, base units)
 
 **Sales** — `ISalesReportQueries.GetSalesFactsAsync`: lines of posted invoices (Posted / PartiallyPaid / Paid / Closed) and posted credit notes (negative). Net and tax at the document rate; cost of sales = line cost at issue, rounded as journalised; credit notes reverse cost only when restocked.
-`sales/summary` (by day/month/year: invoices, credit notes, sales, returns, net revenue, tax, cost of sales, gross profit, margin) · `sales/by-product` · `sales/by-customer` · `sales/by-branch` · `sales/returns` · `sales/gross-profit` (per document).
-Ties to the ledger (tested): net revenue = −(SalesRevenue + ServiceRevenue) − SalesReturns; cost of sales = CostOfGoodsSold. There is no salesperson on sales documents, so there is no by-salesperson report.
+`sales/summary` (by day/month/year: invoices, credit notes, sales, returns, net revenue, tax, cost of sales, gross profit, margin) · `sales/by-product` · `sales/by-customer` · `sales/by-branch` · `sales/returns` · `sales/gross-profit` (per document) · `sales/by-salesperson` (also POS receipts and refunds through `IPosSalesQueries`; filter `salespersonId`).
+Ties to the ledger (tested): net revenue = −(SalesRevenue + ServiceRevenue) − SalesReturns; cost of sales = CostOfGoodsSold.
+
+**People** (module `commissions`, permission `people.commission.read`) — `ICommissionReportQueries`: `people/commission-statement` (commissioned documents of posted runs per salesperson; reversed runs flagged with zero commission; filter `salespersonId`).
 
 **Purchasing** — `IProcurementReportQueries`: `purchasing/by-supplier`, `purchasing/by-product` (quantity, value, average unit cost), `purchasing/price-history` (posted supplier invoices, dated by posting date, else invoice date), `purchasing/receipt-analysis` (posted goods receipts: received / accepted / rejected / invoiced / returned / not-invoiced quantity and value — the GRNI view).
 

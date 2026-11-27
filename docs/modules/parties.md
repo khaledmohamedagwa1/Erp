@@ -43,4 +43,7 @@ Errors: `parties.payment-terms-not-found`, `parties.customer-group-not-found`, `
 
 ## Not yet implemented
 
-Customer/supplier statements, balances and aging (Finance module), supplier price history (Procurement), commission plans, credit-exposure calculation (needs AR open items — Finance/Sales will call `EvaluateExposure`).
+Customer/supplier statements, balances and aging (Finance module), supplier price history (Procurement), credit-exposure calculation (needs AR open items — Finance/Sales will call `EvaluateExposure`).
+
+Customers carry a default salesperson (`SalespersonId`, People module): `PUT /customers/{id}/salesperson {salespersonId}` (`parties.customer.manage`;
+must be an active salesperson, `parties.salesperson-invalid`); exposed on `CustomerDto` and `CustomerInfo`. Commission plans live in the People module.

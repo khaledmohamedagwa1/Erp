@@ -89,7 +89,7 @@ internal static class SalesHandlerHelpers
 // ============================ Quotations ============================
 
 public sealed record CreateQuotationCommand(Guid CustomerId, Guid WarehouseId, DateOnly Date, DateOnly ValidUntil, Guid? PriceListId, string? Reference, string? Notes,
-    IReadOnlyList<SalesLineRequest> Lines) : ICommand<SalesDocumentDto>;
+    IReadOnlyList<SalesLineRequest> Lines, Guid? SalespersonId = null) : ICommand<SalesDocumentDto>;
 
 public sealed class CreateQuotationValidator : AbstractValidator<CreateQuotationCommand>
 {
@@ -104,7 +104,8 @@ public sealed class CreateQuotationValidator : AbstractValidator<CreateQuotation
     }
 }
 
-public sealed class CreateQuotationHandler(ISalesDbContext db, SalesScope scope, SalesPricing pricing) : ICommandHandler<CreateQuotationCommand, SalesDocumentDto>
+public sealed class CreateQuotationHandler(ISalesDbContext db, SalesScope scope, SalesPricing pricing, SalespersonResolver salespersons)
+    : ICommandHandler<CreateQuotationCommand, SalesDocumentDto>
 {
     public async Task<Result<SalesDocumentDto>> Handle(CreateQuotationCommand c, CancellationToken ct)
     {
@@ -122,10 +123,17 @@ public sealed class CreateQuotationHandler(ISalesDbContext db, SalesScope scope,
             return priced.Error;
         }
 
+        var salesperson = await salespersons.ResolveAsync(c.SalespersonId, null, s.Customer, ct);
+        if (salesperson.IsFailure)
+        {
+            return salesperson.Error;
+        }
+
         try
         {
             var quotation = new SalesQuotation(s.CompanyId, s.LegalEntityId, s.BranchId, s.WarehouseId, s.Customer.Id, s.Customer.PostingGroup, s.Currency, s.Rate,
                 priceList, priced.Value.TaxInclusive, c.Date, c.ValidUntil, c.Reference, c.Notes, priced.Value.Lines);
+            quotation.AssignSalesperson(salesperson.Value);
             db.Quotations.Add(quotation);
             await db.SaveChangesAsync(ct);
             return SalesMapping.ToDto(quotation);
@@ -244,6 +252,7 @@ public sealed class ConvertQuotationHandler(ISalesDbContext db, SalesScope scope
         {
             var order = new SalesOrder(q.CompanyId, q.LegalEntityId, q.BranchId, q.WarehouseId, q.CustomerId, q.CustomerPostingGroup, q.Currency, setting.Value.Rate,
                 q.PriceListId, q.TaxInclusive, date, null, q.Id, q.Number, q.Notes, priced.Value.Lines);
+            order.AssignSalesperson(q.SalespersonId);
             q.MarkConverted(order.Id);
             db.Orders.Add(order);
             await db.SaveChangesAsync(ct);
@@ -286,7 +295,7 @@ public sealed class ListQuotationsHandler(ISalesDbContext db) : IQueryHandler<Li
 // ============================ Sales orders ============================
 
 public sealed record CreateOrderCommand(Guid CustomerId, Guid WarehouseId, DateOnly Date, DateOnly? RequestedDate, Guid? PriceListId, string? Reference, string? Notes,
-    IReadOnlyList<SalesLineRequest> Lines) : ICommand<SalesDocumentDto>;
+    IReadOnlyList<SalesLineRequest> Lines, Guid? SalespersonId = null) : ICommand<SalesDocumentDto>;
 
 public sealed class CreateOrderValidator : AbstractValidator<CreateOrderCommand>
 {
@@ -301,7 +310,8 @@ public sealed class CreateOrderValidator : AbstractValidator<CreateOrderCommand>
     }
 }
 
-public sealed class CreateOrderHandler(ISalesDbContext db, SalesScope scope, SalesPricing pricing) : ICommandHandler<CreateOrderCommand, SalesDocumentDto>
+public sealed class CreateOrderHandler(ISalesDbContext db, SalesScope scope, SalesPricing pricing, SalespersonResolver salespersons)
+    : ICommandHandler<CreateOrderCommand, SalesDocumentDto>
 {
     public async Task<Result<SalesDocumentDto>> Handle(CreateOrderCommand c, CancellationToken ct)
     {
@@ -319,10 +329,17 @@ public sealed class CreateOrderHandler(ISalesDbContext db, SalesScope scope, Sal
             return priced.Error;
         }
 
+        var salesperson = await salespersons.ResolveAsync(c.SalespersonId, null, s.Customer, ct);
+        if (salesperson.IsFailure)
+        {
+            return salesperson.Error;
+        }
+
         try
         {
             var order = new SalesOrder(s.CompanyId, s.LegalEntityId, s.BranchId, s.WarehouseId, s.Customer.Id, s.Customer.PostingGroup, s.Currency, s.Rate,
                 priceList, priced.Value.TaxInclusive, c.Date, c.RequestedDate, null, c.Reference, c.Notes, priced.Value.Lines);
+            order.AssignSalesperson(salesperson.Value);
             db.Orders.Add(order);
             await db.SaveChangesAsync(ct);
             return SalesMapping.ToDto(order);

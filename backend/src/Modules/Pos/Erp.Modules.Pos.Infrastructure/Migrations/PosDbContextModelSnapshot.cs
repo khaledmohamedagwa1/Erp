@@ -262,6 +262,9 @@ namespace Erp.Modules.Pos.Infrastructure.Migrations
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
 
+                    b.Property<Guid?>("SalespersonId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid>("ShiftId")
                         .HasColumnType("uniqueidentifier");
 

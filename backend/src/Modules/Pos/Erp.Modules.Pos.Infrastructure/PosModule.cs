@@ -27,7 +27,8 @@ public sealed record SubmitReceiptBody(
     decimal? ExpectedGross,
     Guid? CustomerId,
     IReadOnlyList<PosLineInput> Lines,
-    IReadOnlyList<PosPaymentInput> Payments);
+    IReadOnlyList<PosPaymentInput> Payments,
+    Guid? SalespersonId = null);
 
 public sealed record RefundBody(Guid ClientReceiptId, IReadOnlyList<RefundLineInput> Lines, IReadOnlyList<PosPaymentInput>? Payments, Guid? TerminalId);
 
@@ -67,6 +68,8 @@ public sealed class PosModule : IErpModule
         services.AddScoped<TerminalValidator>();
         services.AddScoped<ShiftTotals>();
         services.AddScoped<ReceiptPosting>();
+        services.AddScoped<PosSalespersonResolver>();
+        services.AddScoped<IPosSalesQueries, PosSalesQueries>();
         services.AddHandlersFromAssembly(typeof(IPosDbContext).Assembly);
     }
 
@@ -137,7 +140,7 @@ public sealed class PosModule : IErpModule
         g.MapPost("/receipts", async (SubmitReceiptBody b, [FromHeader(Name = PosDevice.HeaderName)] string? deviceKey, IDispatcher d, CancellationToken ct) =>
             {
                 var result = await d.Send(new SubmitReceiptCommand(b.TerminalId, b.ClientReceiptId, b.PriceVersion, b.ExpectedGross, b.CustomerId, b.Lines ?? [],
-                    b.Payments ?? [], deviceKey), ct);
+                    b.Payments ?? [], deviceKey, b.SalespersonId), ct);
                 if (result.IsFailure)
                 {
                     return result.Error.ToProblem();

@@ -404,7 +404,7 @@ public class ReportingTests(ErpApiFixture fixture)
         await ErpApiFixture.SignInAsync(analyst, t.TenantCode, "analyst@reports.example", "Analyst-Passw0rd!");
         var visible = await Ok(await analyst.GetAsCompanyAsync(Api, t.CompanyId));
         visible.EnumerateArray().ShouldAllBe(r => r.GetProperty("area").GetString() == "sales");
-        visible.GetArrayLength().ShouldBe(6);
+        visible.GetArrayLength().ShouldBe(7);
         (await analyst.GetAsCompanyAsync($"{Api}/sales/summary", t.CompanyId)).StatusCode.ShouldBe(HttpStatusCode.OK);
         (await analyst.GetAsCompanyAsync($"{Api}/purchasing/by-supplier", t.CompanyId)).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
         (await analyst.GetAsCompanyAsync($"{Api}/documents/sales-invoice/{Guid.NewGuid()}", t.CompanyId)).StatusCode.ShouldBe(HttpStatusCode.Forbidden);

@@ -730,6 +730,9 @@ public sealed class PosReceipt : AggregateRoot, IBranchScoped, IWarehouseScoped
 
     public Guid CustomerId { get; private set; }
 
+    /// <summary>Employee credited with the sale (commissions); refunds inherit the sale's salesperson.</summary>
+    public Guid? SalespersonId { get; private set; }
+
     public string Currency { get; private set; } = string.Empty;
 
     public Guid PriceListId { get; private set; }
@@ -773,6 +776,8 @@ public sealed class PosReceipt : AggregateRoot, IBranchScoped, IWarehouseScoped
     public List<PosPayment> Payments { get; private set; } = [];
 
     public PosReceiptLine Line(Guid uid) => Lines.FirstOrDefault(l => l.Uid == uid) ?? throw new DomainException(PosErrors.LineNotFound);
+
+    public void AssignSalesperson(Guid? salespersonId) => SalespersonId = salespersonId;
 
     public void SetLines(IReadOnlyList<PosReceiptLine> lines)
     {

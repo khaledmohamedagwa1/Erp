@@ -25,7 +25,7 @@ public sealed record PostingRuleDto(Guid Id, string Role, Guid AccountId, string
     string? PartyPostingGroup, Guid? TaxCodeId, Guid? WarehouseId, int Priority);
 
 public sealed record JournalLineDto(int LineNo, Guid AccountId, string AccountCode, string AccountNameEn, decimal Debit, decimal Credit,
-    decimal BaseDebit, decimal BaseCredit, Guid? CostCenterId, string? PartyType, Guid? PartyId, string? Description);
+    decimal BaseDebit, decimal BaseCredit, Guid? CostCenterId, string? PartyType, Guid? PartyId, string? Description, Guid? ProfitCenterId = null);
 
 public sealed record JournalDto(Guid Id, Guid LegalEntityId, string? Number, DateOnly JournalDate, string Status, string SourceModule, string SourceDocType,
     Guid SourceDocId, string Purpose, string Description, string Currency, decimal ExchangeRate, decimal TotalBaseDebit, decimal TotalBaseCredit,
@@ -57,7 +57,7 @@ internal static class AccountingMapping
             j.Purpose, j.Description, j.Currency, j.ExchangeRate, j.TotalBaseDebit, j.TotalBaseCredit, j.ReversalOfId, j.ReversedById, j.PostedAtUtc,
             j.Lines.Select(l => new JournalLineDto(l.LineNo, l.AccountId, accounts.GetValueOrDefault(l.AccountId)?.Code ?? "?",
                 accounts.GetValueOrDefault(l.AccountId)?.NameEn ?? "?", l.Debit, l.Credit, l.BaseDebit, l.BaseCredit, l.CostCenterId, l.PartyType,
-                l.PartyId, l.Description)).ToList());
+                l.PartyId, l.Description, l.ProfitCenterId)).ToList());
     }
 }
 
@@ -449,7 +449,7 @@ public sealed class UpsertPostingRuleHandler(IAccountingDbContext db, ITenantCon
 }
 
 // ---------- Manual journals ----------
-public sealed record ManualJournalLine(Guid AccountId, decimal Debit, decimal Credit, Guid? CostCenterId, string? Description);
+public sealed record ManualJournalLine(Guid AccountId, decimal Debit, decimal Credit, Guid? CostCenterId, string? Description, Guid? ProfitCenterId = null);
 
 public sealed record CreateManualJournalCommand(Guid LegalEntityId, DateOnly JournalDate, string Description, string? Currency, decimal? ExchangeRate,
     IReadOnlyList<ManualJournalLine> Lines) : ICommand<JournalDto>;
@@ -498,11 +498,17 @@ public sealed class CreateManualJournalHandler(IAccountingDbContext db, CompanyL
             return AccountingErrors.AccountNotFound;
         }
 
+        var profitCenterIds = command.Lines.Where(l => l.ProfitCenterId != null).Select(l => l.ProfitCenterId!.Value).Distinct().ToList();
+        if (profitCenterIds.Count > 0 && await db.ProfitCenters.CountAsync(p => profitCenterIds.Contains(p.Id) && p.IsActive, cancellationToken) != profitCenterIds.Count)
+        {
+            return ProfitCenterDefaults.ProfitCenterInvalid;
+        }
+
         var journal = JournalEntry.CreateDraft(le.Value.CompanyId, command.LegalEntityId, command.JournalDate, SourceModules.Accounting, DocumentType,
             SequentialGuid.New(), Purpose, command.Description, currency, rate);
         foreach (var line in command.Lines)
         {
-            journal.AddLine(line.AccountId, line.Debit, line.Credit, line.CostCenterId, null, null, line.Description);
+            journal.AddLine(line.AccountId, line.Debit, line.Credit, line.CostCenterId, null, null, line.Description, profitCenterId: line.ProfitCenterId);
         }
 
         db.Journals.Add(journal);

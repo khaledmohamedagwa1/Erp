@@ -20,4 +20,5 @@ public static class ReportAreas
     public const string Manufacturing = "manufacturing";
     public const string Financial = "financial";
     public const string Tax = "tax";
+    public const string People = "people";
 }

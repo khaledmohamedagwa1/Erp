@@ -150,6 +150,9 @@ namespace Erp.Modules.Parties.Infrastructure.Migrations
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
 
+                    b.Property<Guid?>("SalespersonId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("TaxRegistrationNo")
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
