@@ -20,6 +20,10 @@ public interface ITaxDbContext
 
     DbSet<TaxCategoryMapping> TaxCategoryMappings { get; }
 
+    DbSet<EInvoicingSettings> EInvoicingSettings { get; }
+
+    DbSet<EInvoiceSubmission> EInvoiceSubmissions { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
 

@@ -23,6 +23,8 @@ public sealed record ReverseRequest(DateOnly ReversalDate);
 
 public sealed record CashFlowCategoryRequest(string Category);
 
+public sealed record ReportGroupRequest(string Group);
+
 public sealed class AccountingModule : IErpModule
 {
     public ModuleManifest Manifest { get; } = new(
@@ -66,12 +68,14 @@ public sealed class AccountingModule : IErpModule
         services.AddScoped<JournalPoster>();
         services.AddScoped<IJournalPostingService, JournalPostingService>();
         services.AddScoped<IAccountQueries, AccountQueries>();
+        services.AddScoped<IAccountLedgerQueries, AccountLedgerQueries>();
         services.AddScoped<LedgerQueries>();
         services.AddScoped<ILedgerQueries>(sp => sp.GetRequiredService<LedgerQueries>());
         services.AddScoped<CompanyLegalEntities>();
         services.AddScoped<FinancialStatementService>();
         services.AddHandlersFromAssembly(typeof(IAccountingDbContext).Assembly);
         services.AddSingleton(new EventAssembly(typeof(Domain.JournalEntry).Assembly));
+        services.AddSingleton(new EventAssembly(typeof(JournalPosted).Assembly));
     }
 
     public void MapEndpoints(IEndpointRouteBuilder endpoints)
@@ -89,6 +93,9 @@ public sealed class AccountingModule : IErpModule
             .RequirePermission(AccountingPermissions.AccountManage);
         g.MapPut("/accounts/{id:guid}/cash-flow-category", async (Guid id, CashFlowCategoryRequest body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new SetAccountCashFlowCategoryCommand(id, body.Category), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.AccountManage);
+        g.MapPut("/accounts/{id:guid}/report-group", async (Guid id, ReportGroupRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new SetAccountReportGroupCommand(id, body.Group), ct)).ToHttpResult())
             .RequirePermission(AccountingPermissions.AccountManage);
         g.MapPost("/accounts/{id:guid}/deactivate", async (Guid id, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new SetAccountActiveCommand(id, false), ct)).ToHttpResult())

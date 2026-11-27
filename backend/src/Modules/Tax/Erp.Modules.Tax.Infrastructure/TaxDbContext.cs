@@ -23,8 +23,42 @@ public sealed class TaxDbContext(DbContextOptions<TaxDbContext> options, ErpDbCo
 
     public DbSet<TaxCategoryMapping> TaxCategoryMappings => Set<TaxCategoryMapping>();
 
+    public DbSet<EInvoicingSettings> EInvoicingSettings => Set<EInvoicingSettings>();
+
+    public DbSet<EInvoiceSubmission> EInvoiceSubmissions => Set<EInvoiceSubmission>();
+
     protected override void ConfigureModel(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<EInvoicingSettings>(b =>
+        {
+            b.ToTable("EInvoicingSettings");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.Provider).HasMaxLength(50).IsRequired();
+            b.Property(x => x.Environment).HasMaxLength(50).IsRequired();
+            b.Property(x => x.LastHash).HasMaxLength(100);
+            b.HasIndex(TenantIdProperty, nameof(Domain.EInvoicingSettings.CompanyId)).IsUnique();
+        });
+
+        modelBuilder.Entity<EInvoiceSubmission>(b =>
+        {
+            b.ToTable("EInvoiceSubmission");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.SourceModule).HasMaxLength(30).IsRequired();
+            b.Property(x => x.SourceDocType).HasMaxLength(50).IsRequired();
+            b.Property(x => x.DocumentNumber).HasMaxLength(50).IsRequired();
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            b.Property(x => x.Hash).HasMaxLength(100);
+            b.Property(x => x.PreviousHash).HasMaxLength(100);
+            b.Property(x => x.Provider).HasMaxLength(50);
+            b.Property(x => x.ProviderReference).HasMaxLength(200);
+            b.Property(x => x.QrCode).HasMaxLength(2000);
+            b.Property(x => x.Errors).HasMaxLength(4000);
+            b.HasIndex(TenantIdProperty, nameof(EInvoiceSubmission.SourceDocType), nameof(EInvoiceSubmission.SourceDocId)).IsUnique();
+            b.HasIndex(TenantIdProperty, nameof(EInvoiceSubmission.CompanyId), nameof(EInvoiceSubmission.Status));
+        });
+
         modelBuilder.Entity<Currency>(b =>
         {
             b.ToTable("Currency");

@@ -6,8 +6,20 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Erp.Modules.Finance.Application;
 
-public sealed class FinanceDocumentQueries(IFinanceDbContext db) : IFinanceDocumentQueries
+public sealed class FinanceDocumentQueries(IFinanceDbContext db, FinanceScope scope) : IFinanceDocumentQueries
 {
+    public async Task<PrintableDocument?> GetWithholdingCertificatePrintAsync(Guid certificateId, CancellationToken cancellationToken = default)
+    {
+        var certificate = await db.WithholdingCertificates.AsNoTracking().FirstOrDefaultAsync(c => c.Id == certificateId, cancellationToken);
+        if (certificate is null)
+        {
+            return null;
+        }
+
+        var le = await scope.LegalEntityAsync(certificate.LegalEntityId, cancellationToken);
+        return WithholdingPrinting.Build(certificate, le.IsSuccess ? le.Value.FunctionalCurrency : string.Empty);
+    }
+
     public async Task<PrintableDocument?> GetSettlementPrintAsync(Guid settlementId, CancellationToken cancellationToken = default)
     {
         var settlement = await db.Settlements.AsNoTracking().FirstOrDefaultAsync(s => s.Id == settlementId && s.Status == DocumentStatus.Posted, cancellationToken);

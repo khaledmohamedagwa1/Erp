@@ -193,7 +193,7 @@ public class ReportingTests(ErpApiFixture fixture)
 
         // ---- Catalogue: every area is available to the administrator.
         var catalogue = (await Get(t, Api)).EnumerateArray().ToList();
-        catalogue.Select(r => r.GetProperty("area").GetString()).Distinct().ShouldBe(["sales", "purchasing", "inventory", "manufacturing", "financial"], ignoreOrder: true);
+        catalogue.Select(r => r.GetProperty("area").GetString()).Distinct().ShouldBe(["sales", "purchasing", "inventory", "manufacturing", "financial", "tax"], ignoreOrder: true);
         catalogue.Single(r => r.GetProperty("key").GetString() == "trial-balance").GetProperty("href").GetString().ShouldBe("/api/v1/accounting/reports/trial-balance");
 
         // ---- Sales: net revenue = invoice − credit note; COGS = the GL cost of goods sold.
@@ -387,7 +387,7 @@ public class ReportingTests(ErpApiFixture fixture)
         // The services preset has sales and purchasing but neither inventory nor manufacturing.
         var t = await fixture.NewTenantAsync(preset: "services");
         var areas = (await Get(t, Api)).EnumerateArray().Select(r => r.GetProperty("area").GetString()).Distinct().ToList();
-        areas.ShouldBe(["sales", "purchasing", "financial"], ignoreOrder: true);
+        areas.ShouldBe(["sales", "purchasing", "financial", "tax"], ignoreOrder: true);
         (await (await t.Client.GetAsCompanyAsync($"{Api}/inventory/stock-on-hand", t.CompanyId)).ErrorCodeAsync()).ShouldBe("module-disabled");
         (await (await t.Client.GetAsCompanyAsync($"{Api}/sales/nothing", t.CompanyId)).ErrorCodeAsync()).ShouldBe("reporting.report-not-found");
         (await (await t.Client.GetAsync(Api, Ct)).ErrorCodeAsync()).ShouldBe("company.required");

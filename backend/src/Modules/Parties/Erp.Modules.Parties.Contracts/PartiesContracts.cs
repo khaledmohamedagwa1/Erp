@@ -13,7 +13,8 @@ public sealed record CustomerInfo(
     string CreditAction,
     bool OnHold,
     bool IsActive,
-    bool IsWalkIn);
+    bool IsWalkIn,
+    string? TaxRegistrationNo = null);
 
 public sealed record SupplierInfo(
     Guid Id,

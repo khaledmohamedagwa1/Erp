@@ -32,6 +32,8 @@ public interface IFinanceDbContext
 
     DbSet<FxRevaluationRun> FxRevaluationRuns { get; }
 
+    DbSet<WithholdingCertificate> WithholdingCertificates { get; }
+
     EntityEntry<TEntity> Entry<TEntity>(TEntity entity)
         where TEntity : class;
 
@@ -47,6 +49,14 @@ public static class FinanceDocTypes
     public const string InternalTransfer = "InternalTransfer";
     public const string Expense = "Expense";
     public const string FxRevaluation = "FxRevaluation";
+
+    /// <summary>Compensation of the advance allocations of a reversed receipt/payment.</summary>
+    public const string AdvanceAllocationReversal = "AdvanceAllocationReversal";
+
+    /// <summary>Cash movement imported from a general-ledger line posted to a bank/cash account by another module (or a manual journal).</summary>
+    public const string GlJournalLine = "GlJournalLine";
+
+    public const string WithholdingCertificate = "WithholdingCertificate";
 }
 
 public static class FinanceAppErrors
@@ -63,6 +73,10 @@ public static class FinanceAppErrors
     public static readonly Error WithholdingGroupInvalid = Error.Validation("finance.withholding-group-invalid", "The tax group has no withholding component.");
     public static readonly Error SourceNotFound = Error.NotFound("finance.source-not-found", "No open items exist for the source document.");
     public static readonly Error RevaluationExists = Error.Conflict("finance.revaluation-exists", "A revaluation already exists for this legal entity and date.");
+    public static readonly Error CrossCurrencyRateMissing = Error.Validation("finance.cross-currency-rate-missing",
+        "No exchange rate is recorded for one of the currencies on this date; give settlementAmount for the cross-currency allocation.");
+    public static readonly Error OnWithholdingCertificate = Error.Conflict("finance.on-withholding-certificate",
+        "The document is listed on an active withholding certificate. Cancel the certificate before reversing.");
 }
 
 /// <summary>Resolves the legal entity (must belong to the active company, adopting it when none is set) and its functional currency.</summary>
@@ -104,14 +118,83 @@ public sealed class FinanceScope(ITenantContext tenant, IOrganizationQueries org
         var rate = await rates.GetRateAsync(currency, functionalCurrency, date, ExchangeRateKind.Spot, ct);
         return rate is > 0 ? rate.Value : FinanceAppErrors.RateMissing;
     }
+
+    /// <summary>
+    /// Converts an amount in the open item's currency to the settlement's currency through the functional currency at the spot rates of
+    /// <paramref name="date"/> (cross-currency allocation). The settlement currency uses <paramref name="settlementRate"/> when it is the
+    /// settlement's own rate on that date.
+    /// </summary>
+    public async Task<Result<decimal>> CrossAmountAsync(decimal itemAmount, string itemCurrency, string settlementCurrency, string functionalCurrency, DateOnly date,
+        decimal? settlementRate, CancellationToken ct)
+    {
+        var itemRate = await RateAsync(itemCurrency, functionalCurrency, date, null, ct);
+        var targetRate = await RateAsync(settlementCurrency, functionalCurrency, date, settlementRate, ct);
+        if (itemRate.IsFailure || targetRate.IsFailure)
+        {
+            return FinanceAppErrors.CrossCurrencyRateMissing;
+        }
+
+        return FinanceMath.Round(itemAmount * itemRate.Value / targetRate.Value);
+    }
 }
 
-/// <summary>Builds functional-currency journal lines (rate 1), skipping zero amounts.</summary>
+/// <summary>
+/// Builds journal lines, skipping zero amounts. The plain methods give functional-currency lines (journal rate 1); the <c>Tx</c> methods give
+/// transaction-currency lines with a fixed functional-currency amount, and <see cref="FxBaseOnly"/> adds exchange differences that have no
+/// transaction-currency amount.
+/// </summary>
 public sealed class JournalLines
 {
     private readonly List<JournalLineRequest> _lines = [];
 
     public IReadOnlyList<JournalLineRequest> Lines => _lines;
+
+    public JournalLines DebitTx(string? role, Guid? accountId, decimal amount, decimal baseAmount, PostingContext? context = null, PartyKind? party = null, Guid? partyId = null,
+        Guid? costCenterId = null, string? description = null, decimal? taxableAmount = null) =>
+        AddTx(role, accountId, true, amount, baseAmount, context, party, partyId, costCenterId, description, taxableAmount);
+
+    public JournalLines CreditTx(string? role, Guid? accountId, decimal amount, decimal baseAmount, PostingContext? context = null, PartyKind? party = null, Guid? partyId = null,
+        Guid? costCenterId = null, string? description = null) =>
+        AddTx(role, accountId, false, amount, baseAmount, context, party, partyId, costCenterId, description, null);
+
+    /// <summary>Realized difference as a functional-currency-only line: positive gain credited to the gain role, negative debited to the loss role.</summary>
+    public JournalLines FxBaseOnly(decimal gain, string gainRole, string lossRole)
+    {
+        if (gain != 0)
+        {
+            _lines.Add(new JournalLineRequest(gain > 0 ? gainRole : lossRole, null, gain < 0 ? -gain : 0, gain > 0 ? gain : 0, BaseOnly: true));
+        }
+
+        return this;
+    }
+
+    private JournalLines AddTx(string? role, Guid? accountId, bool debit, decimal amount, decimal baseAmount, PostingContext? context, PartyKind? party, Guid? partyId,
+        Guid? costCenterId, string? description, decimal? taxableAmount)
+    {
+        if (amount < 0 || (amount == 0 && baseAmount < 0))
+        {
+            // A negative amount flips the side (e.g. a base-only residual of the opposite sign).
+            return AddTx(role, accountId, !debit, -amount, -baseAmount, context, party, partyId, costCenterId, description, taxableAmount);
+        }
+
+        if (baseAmount < 0)
+        {
+            throw new InvalidOperationException("A journal line cannot have a positive transaction amount and a negative functional-currency amount.");
+        }
+
+        if (amount == 0 && baseAmount == 0)
+        {
+            return this;
+        }
+
+        var resolvedRole = accountId is null ? role : null;
+        _lines.Add(amount == 0
+            ? new JournalLineRequest(resolvedRole, accountId, debit ? baseAmount : 0, debit ? 0 : baseAmount, context, costCenterId, party?.ToString(), partyId, description,
+                BaseOnly: true)
+            : new JournalLineRequest(resolvedRole, accountId, debit ? amount : 0, debit ? 0 : amount, context, costCenterId, party?.ToString(), partyId, description,
+                baseAmount, TaxableAmount: taxableAmount));
+        return this;
+    }
 
     public JournalLines Debit(string? role, Guid? accountId, decimal amount, PostingContext? context = null, PartyKind? party = null, Guid? partyId = null, Guid? costCenterId = null, string? description = null) =>
         Add(role, accountId, amount, 0, context, party, partyId, costCenterId, description);
@@ -140,7 +223,14 @@ public sealed class JournalLines
     }
 }
 
-public sealed record AllocationOutcome(decimal RelievedBase, decimal SettlementBase, IReadOnlyList<Allocation> Allocations);
+public sealed record AllocationOutcome(decimal RelievedBase, decimal SettlementBase, IReadOnlyList<Allocation> Allocations)
+{
+    /// <summary>Total taken from the settlement, in the settlement's currency.</summary>
+    public decimal SettlementAmount => Allocations.Sum(a => a.AppliedSettlementAmount);
+}
+
+/// <summary>An open item, the amount settled on it (item currency) and the amount taken from the settlement (settlement currency).</summary>
+public sealed record AllocationLine(OpenItem Item, decimal Amount, decimal SettlementAmount);
 
 /// <summary>
 /// Applies allocations to open items and announces the document-level settlement status (outbox event <see cref="InvoiceSettled"/>).
@@ -148,15 +238,17 @@ public sealed record AllocationOutcome(decimal RelievedBase, decimal SettlementB
 /// </summary>
 public sealed class AllocationService(IFinanceDbContext db)
 {
-    public AllocationOutcome Apply(IReadOnlyList<(OpenItem Item, decimal Amount)> allocations, SettlementKind kind, Guid settlementId, string reference, DateOnly date, decimal settlementRate)
+    public AllocationOutcome Apply(IReadOnlyList<AllocationLine> allocations, SettlementKind kind, Guid settlementId, string settlementCurrency, string reference,
+        DateOnly date, decimal settlementRate)
     {
         var created = new List<Allocation>();
         decimal relieved = 0, settlementBase = 0;
-        foreach (var (item, amount) in allocations)
+        foreach (var (item, amount, settlementAmount) in allocations)
         {
             var itemRelieved = item.Settle(amount);
-            var itemSettlementBase = FinanceMath.ToBase(amount, settlementRate);
-            var allocation = Allocation.Create(item, kind, settlementId, reference, date, amount, itemRelieved, itemSettlementBase);
+            var itemSettlementBase = FinanceMath.ToBase(settlementAmount, settlementRate);
+            var cross = !string.Equals(item.Currency, settlementCurrency, StringComparison.OrdinalIgnoreCase);
+            var allocation = Allocation.Create(item, kind, settlementId, reference, date, amount, itemRelieved, itemSettlementBase, cross ? settlementAmount : null);
             db.Allocations.Add(allocation);
             created.Add(allocation);
             relieved += itemRelieved;
@@ -462,12 +554,17 @@ public sealed class OpenItemQueries(IFinanceDbContext db) : IOpenItemQueries
 
         var direction = partyType == PartyKind.Customer ? SettlementDirection.Receipt : SettlementDirection.Payment;
         var settlements = await db.Settlements.AsNoTracking()
-            .Where(s => s.Direction == direction && s.PartyId == partyId && s.LegalEntityId == legalEntityId && s.Status == DocumentStatus.Posted && s.Date <= to)
+            .Where(s => s.Direction == direction && s.PartyId == partyId && s.LegalEntityId == legalEntityId
+                        && (s.Status == DocumentStatus.Posted || s.Status == DocumentStatus.Reversed) && s.Date <= to)
             .ToListAsync(cancellationToken);
         foreach (var s in settlements)
         {
             var value = FinanceMath.ToBase(s.Amount, s.ExchangeRate) + FinanceMath.ToBase(s.WithholdingAmount, s.ExchangeRate);
             entries.Add((s.Date, 1, direction.ToString(), s.Number ?? string.Empty, s.WithholdingAmount > 0 ? "Including tax withheld" : string.Empty, -value));
+            if (s.Status == DocumentStatus.Reversed && s.ReversalDate is { } reversed && reversed <= to)
+            {
+                entries.Add((reversed, 1, direction + "Reversal", s.Number ?? string.Empty, s.ReversalReason ?? "Reversed", value));
+            }
         }
 
         var itemIds = items.Select(i => i.Id).ToList();

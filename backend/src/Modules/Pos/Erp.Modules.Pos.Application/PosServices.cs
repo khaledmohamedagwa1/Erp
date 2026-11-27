@@ -132,14 +132,14 @@ public sealed class PosJournal
 
     public IReadOnlyList<JournalLineRequest> Lines => _lines;
 
-    public PosJournal Add(string? role, Guid? accountId, decimal debit, decimal credit, PostingContext? context = null, string? description = null)
+    public PosJournal Add(string? role, Guid? accountId, decimal debit, decimal credit, PostingContext? context = null, string? description = null, decimal? taxableAmount = null)
     {
         if (debit == 0 && credit == 0)
         {
             return this;
         }
 
-        _lines.Add(new JournalLineRequest(accountId is null ? role : null, accountId, debit, credit, context, Description: description));
+        _lines.Add(new JournalLineRequest(accountId is null ? role : null, accountId, debit, credit, context, Description: description, TaxableAmount: taxableAmount));
         return this;
     }
 
@@ -167,7 +167,8 @@ public sealed class PosJournal
         foreach (var tax in receipt.Lines.SelectMany(l => l.Taxes).GroupBy(t => t.TaxCodeId))
         {
             var amount = tax.Sum(t => t.Amount);
-            journal.Add(PostingRoles.OutputTax, null, sale ? 0 : amount, sale ? amount : 0, new PostingContext(TaxCodeId: tax.Key), tax.First().Code);
+            journal.Add(PostingRoles.OutputTax, null, sale ? 0 : amount, sale ? amount : 0, new PostingContext(TaxCodeId: tax.Key), tax.First().Code,
+                tax.Sum(t => t.Base));
         }
 
         // Cash rounding: rounded up (more collected) is a credit on a sale; rounded down a debit. Mirrored for refunds.

@@ -48,6 +48,7 @@ public sealed class AccountingDbContext(DbContextOptions<AccountingDbContext> op
             b.Property(x => x.ControlSubledger).HasConversion<string>().HasMaxLength(20);
             b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
             b.Property(x => x.CashFlowCategory).HasConversion<string>().HasMaxLength(20);
+            b.Property(x => x.ReportGroup).HasConversion<string>().HasMaxLength(30);
             b.Ignore(x => x.IsControl);
             b.Ignore(x => x.IsBalanceSheet);
             b.Ignore(x => x.NormalBalance);
@@ -130,6 +131,8 @@ public sealed class AccountingDbContext(DbContextOptions<AccountingDbContext> op
             b.Property(x => x.BaseCredit).HasPrecision(19, 4);
             b.Property(x => x.PartyType).HasMaxLength(30);
             b.Property(x => x.Description).HasMaxLength(300);
+            b.Property(x => x.PostingRole).HasMaxLength(60);
+            b.Property(x => x.TaxableBase).HasPrecision(19, 4);
             b.HasIndex(x => x.AccountId);
             b.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.NoAction);
             b.HasOne<CostCenter>().WithMany().HasForeignKey(x => x.CostCenterId).OnDelete(DeleteBehavior.NoAction);

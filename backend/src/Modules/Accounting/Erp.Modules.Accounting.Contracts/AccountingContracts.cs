@@ -1,4 +1,5 @@
 using System.Reflection;
+using Erp.SharedKernel.Domain;
 using Erp.SharedKernel.Results;
 
 namespace Erp.Modules.Accounting.Contracts;
@@ -134,6 +135,9 @@ public sealed record PostingContext(
 /// <see cref="BaseAmount"/> optionally fixes the functional-currency amount of the line instead of converting at the
 /// journal rate — used by sub-ledgers that relieve an open item at its original rate while cash moves at today's rate.
 /// The journal must still balance in base currency (residuals up to 0.01 go to FxRoundingDifference).
+/// <see cref="BaseOnly"/> lines carry no transaction-currency amount: Debit/Credit are then functional-currency amounts
+/// (realized exchange differences on a foreign-currency settlement). <see cref="TaxableAmount"/> is the transaction-currency
+/// taxable amount behind a tax line (positive), kept for the VAT return.
 /// </summary>
 public sealed record JournalLineRequest(
     string? Role,
@@ -145,7 +149,9 @@ public sealed record JournalLineRequest(
     string? PartyType = null,
     Guid? PartyId = null,
     string? Description = null,
-    decimal? BaseAmount = null);
+    decimal? BaseAmount = null,
+    bool BaseOnly = false,
+    decimal? TaxableAmount = null);
 
 public sealed record AccountInfo(
     Guid Id,
@@ -220,4 +226,76 @@ public interface ILedgerQueries
 
     /// <summary>Accounting readiness: the roles from <paramref name="roles"/> that do not resolve to an account for the legal entity.</summary>
     Task<IReadOnlyList<string>> GetUnresolvedRolesAsync(Guid legalEntityId, IEnumerable<string> roles, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Raised (through the Accounting outbox) whenever a journal is posted, including reversals. Other modules subscribe to react
+/// to posted source documents without coupling to the source module (e.g. e-invoicing of posted sales invoices).
+/// </summary>
+public sealed record JournalPosted(
+    Guid JournalId,
+    Guid LegalEntityId,
+    string Number,
+    string SourceModule,
+    string SourceDocType,
+    Guid SourceDocId,
+    string Purpose,
+    decimal TotalBaseDebit,
+    Guid CompanyId,
+    DateOnly JournalDate) : IDomainEvent;
+
+/// <summary>One posted journal line on an account, for sub-ledgers that reconcile against the general ledger.</summary>
+public sealed record AccountLedgerLine(
+    Guid JournalId,
+    Guid LineId,
+    string Number,
+    DateOnly Date,
+    string SourceModule,
+    string SourceDocType,
+    Guid SourceDocId,
+    string Currency,
+    decimal ExchangeRate,
+    decimal Debit,
+    decimal Credit,
+    decimal BaseDebit,
+    decimal BaseCredit,
+    string Description);
+
+/// <summary>A posted tax line (output or input tax) with its tax code, in functional currency. Signed: positive = tax payable increases.</summary>
+public sealed record TaxLedgerLine(
+    Guid LegalEntityId,
+    DateOnly Date,
+    string Number,
+    string SourceModule,
+    string SourceDocType,
+    Guid SourceDocId,
+    string Role,
+    Guid? TaxCodeId,
+    decimal TaxAmount,
+    decimal? TaxableBase);
+
+/// <summary>Movement in a period on the accounts the tax roles resolve to (for reconciling a VAT return to the ledger).</summary>
+public sealed record TaxAccountMovement(Guid AccountId, string Code, string NameEn, string Role, decimal NetCredit);
+
+/// <summary>Detailed ledger reads for sub-ledgers and tax reporting.</summary>
+public interface IAccountLedgerQueries
+{
+    /// <summary>
+    /// Posted lines on <paramref name="accountId"/> dated up to <paramref name="upTo"/>, excluding journals from
+    /// <paramref name="excludeSourceModule"/> (that module already tracks its own lines).
+    /// </summary>
+    Task<IReadOnlyList<AccountLedgerLine>> GetAccountLinesAsync(Guid legalEntityId, Guid accountId, DateOnly upTo, string? excludeSourceModule,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>The account a role resolves to without context, or null.</summary>
+    Task<Guid?> ResolveRoleAccountAsync(Guid legalEntityId, string role, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lines posted to the OutputTax and InputTax roles in [from, to] for every legal entity of the active
+    /// company (closing entries excluded). Output tax is credit-positive, input tax debit-positive.
+    /// </summary>
+    Task<IReadOnlyList<TaxLedgerLine>> GetTaxLinesAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default);
+
+    /// <summary>Net credit movement in [from, to] on the accounts mapped to the OutputTax and InputTax roles (company-wide).</summary>
+    Task<IReadOnlyList<TaxAccountMovement>> GetTaxAccountMovementsAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default);
 }
