@@ -67,6 +67,7 @@ public sealed class AccountingModule : IErpModule
         services.AddScoped<JournalPoster>();
         services.AddScoped<IJournalPostingService, JournalPostingService>();
         services.AddScoped<IAccountQueries, AccountQueries>();
+        services.AddScoped<IAccountingImportService, AccountingImportService>();
         services.AddScoped<LedgerQueries>();
         services.AddScoped<ILedgerQueries>(sp => sp.GetRequiredService<LedgerQueries>());
         services.AddScoped<CompanyLegalEntities>();

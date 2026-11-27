@@ -46,3 +46,4 @@ contract services called in the same transaction (ADR-006); everything else thro
 | 150 | Fixed assets | assets | fixed-assets |
 | 160 | Reporting | reporting | reporting |
 | 170 | Documents (attachments, notifications) | documents | documents |
+| 180 | Data import | import | import |

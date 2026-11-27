@@ -68,6 +68,7 @@ public sealed class CatalogModule : IErpModule
         services.AddErpDbContext<CatalogDbContext>(CatalogDbContext.SchemaName, order: 40);
         services.AddScoped<ICatalogDbContext>(sp => sp.GetRequiredService<CatalogDbContext>());
         services.AddScoped<ICatalogQueries, CatalogQueries>();
+        services.AddScoped<ICatalogImportService, CatalogImportService>();
         services.AddScoped<ICatalogReportQueries, CatalogReportQueries>();
         services.AddScoped<IPriceCalculator, PriceCalculator>();
         services.AddScoped<IPriceListSnapshotQueries, PriceListSnapshotQueries>();
