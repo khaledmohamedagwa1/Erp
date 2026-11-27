@@ -120,7 +120,7 @@ Format per ADR: Decision · Why · Alternatives considered · Trade-offs · Futu
 * **Why:** Value where needed without operational overhead; reporting summary tables added per measured need; accounting reports always from posted journals (Part 18).
 * **Future:** Read replicas / reporting DB for heavy SaaS tenants.
 
-## ADR-017 Books per legal entity; master data per company; inventory valuation area default = legal entity — Proposed (OQ-INV-1)
+## ADR-017 Books per legal entity; master data per company; inventory valuation area default = legal entity — Accepted 2026-11-27 (decisions log)
 
 * **Decision:** Journals, periods, open items and inventory valuation scoped to legal entity; products/customers/suppliers shared at company level.
 * **Why:** Matches Part 4 definitions; transfers within a legal entity keep cost without revaluation.
@@ -133,7 +133,7 @@ Format per ADR: Decision · Why · Alternatives considered · Trade-offs · Futu
 * **Alternatives:** NgRx global store (heavier than needed); PrimeNG (richer grids, but mixed RTL quality and theming consistency); built-in `@angular/localize`.
 * **Trade-offs:** A data grid with advanced features must be built on CDK table (effort) — revisit if requirements exceed it.
 
-## ADR-019 Build the accounting core before Inventory/Procurement/Sales — Proposed
+## ADR-019 Build the accounting core before Inventory/Procurement/Sales — Accepted 2026-11-27 (decisions log)
 
 * **Decision:** Move COA, periods, journals and posting engine from Phase 7 to directly after master data.
 * **Why:** Every posting in Phases 4–6 must produce balanced journals (Part 22); avoids retrofitting.
@@ -182,3 +182,9 @@ Format per ADR: Decision · Why · Alternatives considered · Trade-offs · Futu
 
 * **Decision:** Module activation and policies live in schema `configuration`. Schema `core` holds platform tables (number sequences); `audit` holds the audit log.
 * **Why:** Each DbContext keeps its own `__EFMigrationsHistory` in its own schema; two contexts sharing `core` would collide.
+
+## ADR-028 Open business-policy questions resolved with the recommended defaults — Accepted 2026-11-27
+
+* **Decision:** Every open question in docs/business/03 is resolved with its recommended default, recorded in [docs/business/05-decisions-log.md](docs/business/05-decisions-log.md).
+* **Why:** The project owner instructed the team to decide and proceed.
+* **Trade-offs:** Items marked ⚖️ there (revenue timing, tax, FX, year-end, costing) must be confirmed by a qualified accountant/tax adviser before production use; they are configurable so the confirmation does not require rework. E-invoicing submission remains out of scope.

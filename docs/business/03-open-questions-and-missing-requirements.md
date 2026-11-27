@@ -1,5 +1,7 @@
 # Missing Requirements & Open Questions
 
+> **Update 2026-11-27:** all open questions below were resolved with their recommended defaults — see [05-decisions-log.md](05-decisions-log.md). The 🔴 markers are kept for history.
+
 Part 25 requires that critical accounting, tax and inventory policy decisions are **not** made silently. Each item below has a **recommended default**. Items marked **🔴 Blocking** must be confirmed before the phase that implements them starts; the recommendation is used as the working assumption until then and is configurable wherever possible.
 
 ## 1. Missing business requirements (not covered by the specification)
