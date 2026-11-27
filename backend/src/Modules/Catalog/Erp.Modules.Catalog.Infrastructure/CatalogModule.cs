@@ -69,6 +69,7 @@ public sealed class CatalogModule : IErpModule
         services.AddScoped<ICatalogDbContext>(sp => sp.GetRequiredService<CatalogDbContext>());
         services.AddScoped<ICatalogQueries, CatalogQueries>();
         services.AddScoped<IPriceCalculator, PriceCalculator>();
+        services.AddScoped<IPriceListSnapshotQueries, PriceListSnapshotQueries>();
 
         // Inventory registers a real probe; this default answers "never used".
         services.TryAddScoped<IProductUsageProbe, NoProductUsageProbe>();

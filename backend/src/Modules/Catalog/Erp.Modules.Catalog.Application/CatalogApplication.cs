@@ -840,3 +840,30 @@ internal static class CatalogMapping
             p.Variants.Select(v => new ProductVariantDto(v.Id, v.Sku, v.AttributeValues())).ToList());
     }
 }
+
+public sealed class PriceListSnapshotQueries(ICatalogDbContext db) : IPriceListSnapshotQueries
+{
+    public async Task<PriceListSnapshot?> GetSnapshotAsync(Guid priceListId, DateOnly date, CancellationToken cancellationToken = default)
+    {
+        var list = await db.PriceLists.AsNoTracking().Include(p => p.Items).FirstOrDefaultAsync(p => p.Id == priceListId, cancellationToken);
+        if (list is null || !list.IsValidOn(date))
+        {
+            return null;
+        }
+
+        var version = await GetVersionAsync(priceListId, cancellationToken) ?? string.Empty;
+        var items = list.Items.Where(i => i.IsValidOn(date))
+            .Select(i => new PriceListSnapshotItem(i.ProductId, i.VariantId, i.UomId, i.MinQuantity, i.Price)).ToList();
+        var productIds = items.Select(i => i.ProductId).Distinct().ToList();
+        var barcodes = await db.Products.AsNoTracking().Where(p => productIds.Contains(p.Id) && p.IsActive)
+            .SelectMany(p => p.Barcodes).Select(b => new BarcodeInfo(b.Barcode, b.ProductId, b.VariantId, b.UomId)).ToListAsync(cancellationToken);
+        return new PriceListSnapshot(list.Id, list.Code, list.Currency, list.TaxInclusive, version, items, barcodes);
+    }
+
+    public async Task<string?> GetVersionAsync(Guid priceListId, CancellationToken cancellationToken = default)
+    {
+        var rowVersion = await db.PriceLists.AsNoTracking().Where(p => p.Id == priceListId)
+            .Select(p => EF.Property<byte[]>(p, "RowVersion")).FirstOrDefaultAsync(cancellationToken);
+        return rowVersion is null ? null : Convert.ToBase64String(rowVersion);
+    }
+}

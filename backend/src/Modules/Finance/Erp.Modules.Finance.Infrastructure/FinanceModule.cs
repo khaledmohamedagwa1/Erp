@@ -69,6 +69,7 @@ public sealed class FinanceModule : IErpModule
         services.AddScoped<ISubledgerService>(sp => sp.GetRequiredService<SubledgerService>());
         services.AddScoped<ICreditExposureQueries, CreditExposureQueries>();
         services.AddScoped<IOpenItemQueries, OpenItemQueries>();
+        services.AddScoped<ICashBankAccountQueries, CashBankAccountQueries>();
         services.AddHandlersFromAssembly(typeof(IFinanceDbContext).Assembly);
         services.AddSingleton(new EventAssembly(typeof(OpenItem).Assembly));
         services.AddSingleton(new EventAssembly(typeof(InvoiceSettled).Assembly));

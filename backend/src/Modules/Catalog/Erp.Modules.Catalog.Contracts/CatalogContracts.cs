@@ -45,6 +45,33 @@ public interface IProductUsageProbe
     Task<bool> IsUsedAsync(Guid productId, CancellationToken cancellationToken = default);
 }
 
+public sealed record PriceListSnapshotItem(Guid ProductId, Guid? VariantId, Guid UomId, decimal MinQuantity, decimal Price);
+
+public sealed record BarcodeInfo(string Barcode, Guid ProductId, Guid? VariantId, Guid? UomId);
+
+/// <summary>
+/// The prices of one price list valid on a date, with the barcodes of its products. <see cref="Version"/> changes whenever the
+/// price list or any of its items changes (it is the list's row version), so a client cache can detect stale prices.
+/// </summary>
+public sealed record PriceListSnapshot(
+    Guid PriceListId,
+    string Code,
+    string Currency,
+    bool TaxInclusive,
+    string Version,
+    IReadOnlyList<PriceListSnapshotItem> Items,
+    IReadOnlyList<BarcodeInfo> Barcodes);
+
+/// <summary>Bulk read of a price list for offline-capable clients such as POS terminals.</summary>
+public interface IPriceListSnapshotQueries
+{
+    /// <summary>Null when the price list does not exist in the active company or is not valid on the date.</summary>
+    Task<PriceListSnapshot?> GetSnapshotAsync(Guid priceListId, DateOnly date, CancellationToken cancellationToken = default);
+
+    /// <summary>The current version stamp of a price list (null when it does not exist).</summary>
+    Task<string?> GetVersionAsync(Guid priceListId, CancellationToken cancellationToken = default);
+}
+
 public static class CatalogPermissions
 {
     public const string Read = "catalog.read";

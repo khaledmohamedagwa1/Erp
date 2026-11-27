@@ -135,3 +135,12 @@ public static class FinancePermissions
     public const string ReconciliationManage = "finance.reconciliation.manage";
     public const string RevaluationRun = "finance.revaluation.run";
 }
+
+/// <summary>A cash drawer/safe or bank account as other modules need it (e.g. POS terminals post to their cash account).</summary>
+public sealed record CashBankAccountInfo(Guid Id, Guid LegalEntityId, string Kind, string Code, string Name, string Currency, Guid? GlAccountId, bool IsActive);
+
+/// <summary>Read access to cash and bank accounts of the active company.</summary>
+public interface ICashBankAccountQueries
+{
+    Task<CashBankAccountInfo?> GetAsync(Guid cashBankAccountId, CancellationToken cancellationToken = default);
+}

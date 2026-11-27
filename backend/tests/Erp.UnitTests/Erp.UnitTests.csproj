@@ -22,6 +22,8 @@
     <ProjectReference Include="../../src/Modules/Finance/Erp.Modules.Finance.Application/Erp.Modules.Finance.Application.csproj" />
     <ProjectReference Include="../../src/Modules/Sales/Erp.Modules.Sales.Domain/Erp.Modules.Sales.Domain.csproj" />
     <ProjectReference Include="../../src/Modules/Sales/Erp.Modules.Sales.Application/Erp.Modules.Sales.Application.csproj" />
+    <ProjectReference Include="../../src/Modules/Pos/Erp.Modules.Pos.Domain/Erp.Modules.Pos.Domain.csproj" />
+    <ProjectReference Include="../../src/Modules/Pos/Erp.Modules.Pos.Application/Erp.Modules.Pos.Application.csproj" />
     <ProjectReference Include="../../src/Modules/Inventory/Erp.Modules.Inventory.Domain/Erp.Modules.Inventory.Domain.csproj" />
     <ProjectReference Include="../../src/Modules/Workflow/Erp.Modules.Workflow.Domain/Erp.Modules.Workflow.Domain.csproj" />
     <ProjectReference Include="../../src/Modules/Manufacturing/Erp.Modules.Manufacturing.Domain/Erp.Modules.Manufacturing.Domain.csproj" />
