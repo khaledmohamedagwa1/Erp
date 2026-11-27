@@ -243,8 +243,18 @@ Recommended schedule (root crontab):
   1. Change it in SQL Server.
   2. Update `secrets/ConnectionStrings__Erp`, and `SQL_SA_PASSWORD` in `.env` for bundled SQL.
   3. Restart.
-- **Platform key:** `Platform__ApiKey` enables the platform provisioning API. The public proxy blocks that API;
-  remove the file to disable it entirely.
+- **Platform key / operators:** `Platform__ApiKey` now only bootstraps the **first** platform operator
+  (`POST /api/platform/operators/bootstrap`); once an operator exists the key is refused. Operators sign in with password +
+  TOTP (`POST /api/platform/auth/login`) and provision tenants with their token. Store the TOTP secret returned at creation
+  in an authenticator app; remove the key file after bootstrap. Operator actions are listed in `identity.PlatformAuditEntry`.
+  The public proxy still blocks `/api/platform`.
+- **Several API instances → Redis:** set `ERP_CACHE_PROVIDER=Redis` in `.env` and start the `redis` profile
+  (`docker compose ... --profile redis up -d`); Helm: `cache.provider=Redis` and either `cache.bundledRedis.enabled=true`
+  or the secret key `ErpCache__RedisConnection` for a managed Redis. Without it, a revoked session can stay usable on
+  another instance for up to 60 s and sign-in rate limits are per instance. Redis holds cache data only (no persistence
+  needed); if it is unreachable, requests needing a session check fail — keep it next to the API.
+- **External sign-in secrets:** a provider configured with `clientSecretName = X` reads `secrets/Auth__Oidc__Secrets__X`
+  (owner 1654, mode 0400). Register `https://<host>/api/v1/auth/oidc/callback` as the redirect URI with the provider.
 
 ## 9. Troubleshooting
 
@@ -254,6 +264,9 @@ Recommended schedule (root crontab):
 | `UnauthorizedAccessException: Access to the path '/run/secrets'` | Secret ownership was changed. Run `chown -R 1654:1654 secrets && chmod 500 secrets && chmod 400 secrets/*`. |
 | Proxy returns 502 | api is not ready yet, or is crash-looping (`logs api`). During an upgrade, wait for `healthcheck.sh`. |
 | `/health/ready` is Unhealthy with `migrations` | Run `docker compose ... --profile migrate run --rm migrator migrate` (or `upgrade.sh`). |
+| `403 identity.step-up-required` on administration screens | Expected: the user must confirm a TOTP code (`/auth/step-up`), or enroll in two-step verification first (`mfaEnrollmentRequired: true`). Evaluation installs may set `Auth__StepUp__AllowWithoutMfa=true`. |
+| `403 data-scope.denied` / documents "missing" for a user | The user's company access lists branches/warehouses; the document belongs to another one. Widen the access or grant `identity.scope.all`. |
+| api exits with "ErpCache:RedisConnection is required" | `ErpCache__Provider=Redis` without a connection string. Set `ERP_REDIS_CONNECTION` / the secret, or switch back to `Memory`. |
 | Migrator exit code 3 | Destructive schema change refused. Review, back up, then run `migrate --allow-destructive`. |
 | Users are signed out after every request through the proxy | `ERP_PUBLIC_ORIGIN` does not match the URL users browse to, or a proxy in front of nginx strips `X-Forwarded-Proto`. |
 | Wrong client IPs in logs | Another proxy sits in front of nginx: add its network to `Hosting__KnownNetworks__1` and raise `Hosting__ForwardLimit`. |

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using Erp.Application.Abstractions;
@@ -7,6 +8,7 @@ using Erp.Web.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -63,7 +65,7 @@ public sealed class JwtTokenService(SigningKeyProvider keys, IOptions<AuthOption
 {
     private static readonly JsonWebTokenHandler Handler = new();
 
-    public AccessToken CreateAccessToken(User user, Guid tenantId, Guid sessionId)
+    public AccessToken CreateAccessToken(User user, Guid tenantId, UserSession session)
     {
         var settings = options.Value;
         var now = clock.UtcNow;
@@ -76,16 +78,30 @@ public sealed class JwtTokenService(SigningKeyProvider keys, IOptions<AuthOption
             NotBefore = now,
             Expires = expires,
             SigningCredentials = new SigningCredentials(keys.Key, SecurityAlgorithms.RsaSha256),
-            Subject = new ClaimsIdentity(
-            [
-                new Claim(ErpClaims.Subject, user.Id.ToString()),
-                new Claim(ErpClaims.Tenant, tenantId.ToString()),
-                new Claim(ErpClaims.Session, sessionId.ToString()),
-                new Claim(ErpClaims.Email, user.Email),
-                new Claim(ErpClaims.Name, user.DisplayName),
-            ]),
+            Subject = new ClaimsIdentity(Claims(user, tenantId, session)),
         });
         return new AccessToken(token, expires);
+    }
+
+    private static List<Claim> Claims(User user, Guid tenantId, UserSession session)
+    {
+        var claims = new List<Claim>
+        {
+            new(ErpClaims.Subject, user.Id.ToString()),
+            new(ErpClaims.Tenant, tenantId.ToString()),
+            new(ErpClaims.Session, session.Id.ToString()),
+            new(ErpClaims.Email, user.Email),
+            new(ErpClaims.Name, user.DisplayName),
+            new(ErpClaims.MfaEnrolled, user.MfaEnabled ? "true" : "false"),
+            new(ErpClaims.AuthenticationMethods, session.AuthenticationMethod.StartsWith("ext", StringComparison.Ordinal) ? "ext" : "pwd"),
+        };
+        if (session.LastMfaAtUtc is { } mfaAt)
+        {
+            claims.Add(new Claim(ErpClaims.MfaAt, new DateTimeOffset(DateTime.SpecifyKind(mfaAt, DateTimeKind.Utc)).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
+            claims.Add(new Claim(ErpClaims.AuthenticationMethods, "otp"));
+        }
+
+        return claims;
     }
 }
 
@@ -98,7 +114,7 @@ public sealed class ConfigureJwtBearer(SigningKeyProvider keys, IOptions<AuthOpt
         jwt.TokenValidationParameters = new TokenValidationParameters
         {
             ValidIssuer = settings.Issuer,
-            ValidAudience = settings.Audience,
+            ValidAudience = name == PlatformAuth.Scheme ? settings.PlatformAudience : settings.Audience,
             IssuerSigningKey = keys.Key,
             ValidAlgorithms = [SecurityAlgorithms.RsaSha256],
             ClockSkew = TimeSpan.FromSeconds(30),
@@ -111,38 +127,64 @@ public sealed class ConfigureJwtBearer(SigningKeyProvider keys, IOptions<AuthOpt
 
 /// <summary>
 /// Caches session status, company access and permissions for a short time. Keys always include the tenant.
-/// Changes invalidate entries explicitly; permission changes bump a tenant-wide version.
+/// Session status and invalidation versions live in <see cref="IDistributedCache"/> (Redis when several instances run), so a
+/// revoked session or a permission change takes effect on every instance at once; the bulky access/permission lists are
+/// cached per instance under keys that include those versions.
 /// </summary>
-public sealed class IdentityCache(IMemoryCache cache, ITenantContext tenantContext) : IIdentityCache
+public sealed class IdentityCache(IDistributedCache shared, ITenantContext tenantContext) : IIdentityCache
 {
     public static readonly TimeSpan Duration = TimeSpan.FromSeconds(60);
+    private static readonly DistributedCacheEntryOptions VersionLifetime = new() { SlidingExpiration = TimeSpan.FromDays(1) };
 
     private Guid Tenant => tenantContext.TenantId ?? throw new InvalidOperationException("Tenant context required.");
 
     public string SessionKey(Guid sessionId) => $"t:{Tenant}:session:{sessionId}";
 
-    public string UserKey(Guid userId, string part) => $"t:{Tenant}:user:{userId}:{part}:{UserVersion(userId)}:{PermissionVersion()}";
+    public async Task<string> UserKeyAsync(Guid userId, string part, CancellationToken cancellationToken = default) =>
+        $"t:{Tenant}:user:{userId}:{part}:{await VersionAsync(UserVersionKey(userId), cancellationToken)}:{await VersionAsync(PermissionVersionKey, cancellationToken)}";
 
-    public void InvalidateSession(Guid sessionId) => cache.Remove(SessionKey(sessionId));
+    public async Task<bool?> GetSessionActiveAsync(Guid sessionId, CancellationToken cancellationToken) =>
+        await shared.GetStringAsync(SessionKey(sessionId), cancellationToken) switch
+        {
+            "1" => true,
+            "0" => false,
+            _ => null,
+        };
 
-    public void InvalidateUser(Guid userId) => cache.Set($"t:{Tenant}:user:{userId}:v", UserVersion(userId) + 1);
+    public Task SetSessionActiveAsync(Guid sessionId, bool active, CancellationToken cancellationToken) =>
+        shared.SetStringAsync(SessionKey(sessionId), active ? "1" : "0", new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = Duration }, cancellationToken);
 
-    public void InvalidateAllPermissions() => cache.Set($"t:{Tenant}:perm:v", PermissionVersion() + 1);
+    public Task InvalidateSessionAsync(Guid sessionId) => shared.RemoveAsync(SessionKey(sessionId));
 
-    private long UserVersion(Guid userId) => cache.TryGetValue($"t:{Tenant}:user:{userId}:v", out long v) ? v : 0;
+    // A fresh random version (not an increment) avoids lost updates between instances without a distributed lock.
+    public Task InvalidateUserAsync(Guid userId) => shared.SetStringAsync(UserVersionKey(userId), NewVersion(), VersionLifetime);
 
-    private long PermissionVersion() => cache.TryGetValue($"t:{Tenant}:perm:v", out long v) ? v : 0;
+    public Task InvalidateAllPermissionsAsync() => shared.SetStringAsync(PermissionVersionKey, NewVersion(), VersionLifetime);
+
+    private string UserVersionKey(Guid userId) => $"t:{Tenant}:user:{userId}:v";
+
+    private string PermissionVersionKey => $"t:{Tenant}:perm:v";
+
+    private static string NewVersion() => Guid.NewGuid().ToString("N")[..12];
+
+    private async Task<string> VersionAsync(string key, CancellationToken cancellationToken) =>
+        await shared.GetStringAsync(key, cancellationToken) ?? "0";
 }
 
 public sealed class UserAccessService(IdentityDbContext db, IdentityCache keys, IMemoryCache cache, IClock clock) : IUserAccessService
 {
-    public async Task<bool> IsSessionActiveAsync(Guid sessionId, CancellationToken cancellationToken = default) =>
-        await cache.GetOrCreateAsync(keys.SessionKey(sessionId), async entry =>
+    public async Task<bool> IsSessionActiveAsync(Guid sessionId, CancellationToken cancellationToken = default)
+    {
+        if (await keys.GetSessionActiveAsync(sessionId, cancellationToken) is { } cached)
         {
-            entry.AbsoluteExpirationRelativeToNow = IdentityCache.Duration;
-            var now = clock.UtcNow;
-            return await db.Sessions.AsNoTracking().AnyAsync(s => s.Id == sessionId && s.RevokedAtUtc == null && s.AbsoluteExpiresAtUtc > now, cancellationToken);
-        });
+            return cached;
+        }
+
+        var now = clock.UtcNow;
+        var active = await db.Sessions.AsNoTracking().AnyAsync(s => s.Id == sessionId && s.RevokedAtUtc == null && s.AbsoluteExpiresAtUtc > now, cancellationToken);
+        await keys.SetSessionActiveAsync(sessionId, active, cancellationToken);
+        return active;
+    }
 
     public async Task<CompanyAccess?> GetCompanyAccessAsync(Guid userId, Guid companyId, CancellationToken cancellationToken = default)
     {
@@ -154,7 +196,7 @@ public sealed class UserAccessService(IdentityDbContext db, IdentityCache keys, 
         (await LoadAsync(userId, cancellationToken)).Select(a => a.CompanyId).ToList();
 
     private async Task<IReadOnlyList<CompanyAccess>> LoadAsync(Guid userId, CancellationToken cancellationToken) =>
-        (await cache.GetOrCreateAsync(keys.UserKey(userId, "access"), async entry =>
+        (await cache.GetOrCreateAsync(await keys.UserKeyAsync(userId, "access", cancellationToken), async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = IdentityCache.Duration;
             var rows = await db.Users.AsNoTracking().Where(u => u.Id == userId && u.IsActive)
@@ -166,7 +208,7 @@ public sealed class UserAccessService(IdentityDbContext db, IdentityCache keys, 
 public sealed class PermissionService(IdentityDbContext db, IdentityCache keys, IMemoryCache cache) : IPermissionService
 {
     public async Task<IReadOnlySet<string>> GetPermissionsAsync(Guid userId, CancellationToken cancellationToken = default) =>
-        (await cache.GetOrCreateAsync(keys.UserKey(userId, "permissions"), async entry =>
+        (await cache.GetOrCreateAsync(await keys.UserKeyAsync(userId, "permissions", cancellationToken), async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = IdentityCache.Duration;
             var roleIds = await db.Users.AsNoTracking().Where(u => u.Id == userId && u.IsActive)

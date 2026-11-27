@@ -20,7 +20,9 @@ migrator:
 # Secret with one key per sensitive setting. Mounted as files under /run/secrets (key-per-file configuration):
 #   ConnectionStrings__Erp   (required)  ADO.NET connection string
 #   Auth__SigningKeyPem      (required)  PEM RSA private key for access tokens
-#   Platform__ApiKey         (optional)  >= 32 characters; enables the platform provisioning endpoint
+#   Platform__ApiKey         (optional)  >= 32 characters; bootstraps the first platform operator (then refused)
+#   ErpCache__RedisConnection (optional) StackExchange.Redis connection string when cache.provider is Redis
+#   Auth__Oidc__Secrets__<name> (optional) client secrets of external sign-in providers
 secrets:
   existingSecret: erp-secrets
 
@@ -158,6 +160,20 @@ serviceAccount:
   name: ""
   annotations: {}
   automountToken: false
+
+# Shared cache. With more than one api replica use Redis: session revocation, permission changes and the sign-in rate
+# limit then apply across replicas at once (Memory = per pod, up to 60 s stale). The connection string comes from the
+# secret key ErpCache__RedisConnection, or points at the bundled Redis below.
+cache:
+  provider: Memory # Memory | Redis
+  bundledRedis:
+    # Small in-cluster Redis without persistence (the cache holds nothing that cannot be rebuilt). Evaluation/staging;
+    # prefer a managed Redis with TLS and a password in production.
+    enabled: false
+    image: redis:7.4-alpine
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
 
 networkPolicy:
   # Restricts ingress to the API pods to the ingress controller namespace; egress is left open (SQL, SMTP).

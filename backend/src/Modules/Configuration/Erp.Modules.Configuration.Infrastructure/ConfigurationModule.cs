@@ -8,6 +8,7 @@ using Erp.Modules.Configuration.Contracts;
 using Erp.Modules.Configuration.Domain;
 using Erp.SharedKernel.Results;
 using Erp.Web.Http;
+using Erp.Web.Security;
 using Erp.Web.Modules;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -84,7 +85,8 @@ public sealed class ConfigurationModule : IErpModule
             .RequirePermission(ConfigurationPermissions.Read);
         group.MapPut("/modules/{code}", async (string code, ModuleChangeRequest body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new SetModuleEnabledCommand(code, body.Enabled), ct)).ToHttpResult())
-            .RequirePermission(ConfigurationPermissions.ModuleManage);
+            .RequirePermission(ConfigurationPermissions.ModuleManage)
+            .RequireStepUp();
 
         group.MapGet("/policies/{section}", async (string section, HttpContext http, IDispatcher d, CancellationToken ct) =>
             {
@@ -112,6 +114,7 @@ public sealed class ConfigurationModule : IErpModule
                     return Results.Ok(new { p.Section, p.Version, p.Values });
                 });
             })
-            .RequirePermission(ConfigurationPermissions.PolicyManage);
+            .RequirePermission(ConfigurationPermissions.PolicyManage)
+            .RequireStepUp();
     }
 }

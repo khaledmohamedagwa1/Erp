@@ -17,6 +17,10 @@ public static class IdentityPermissions
     public const string UserManage = "identity.user.manage";
     public const string RoleRead = "identity.role.read";
     public const string RoleManage = "identity.role.manage";
+    public const string IdentityProviderManage = "identity.idp.manage";
+
+    /// <summary>Sees and acts on every branch and warehouse of a company regardless of the user's data scopes (administrators).</summary>
+    public const string AllDataScopes = "identity.scope.all";
 }
 
 public sealed record UserSummary(Guid Id, string Email, string DisplayName, bool IsActive);

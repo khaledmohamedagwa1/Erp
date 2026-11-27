@@ -34,22 +34,32 @@ public interface IChallengeTokens
 public interface ISessionIssuer
 {
     /// <summary>Completes a sign-in: records it on the user, starts a session with a refresh token, issues an access token.</summary>
-    Task<SignInResult> IssueAsync(User user, Guid tenantId, string? userAgent, string? ipAddress, CancellationToken cancellationToken);
+    /// <param name="mfaVerified">The second factor was verified as part of this sign-in.</param>
+    /// <param name="authenticationMethod">"pwd" or "ext:{provider}".</param>
+    Task<SignInResult> IssueAsync(User user, Guid tenantId, string? userAgent, string? ipAddress, CancellationToken cancellationToken,
+        bool mfaVerified = false, string authenticationMethod = "pwd");
 }
 
 public sealed class SessionIssuer(IIdentityDbContext db, ITokenService tokens, IClock clock, IOptions<AuthOptions> options) : ISessionIssuer
 {
-    public async Task<SignInResult> IssueAsync(User user, Guid tenantId, string? userAgent, string? ipAddress, CancellationToken cancellationToken)
+    public async Task<SignInResult> IssueAsync(User user, Guid tenantId, string? userAgent, string? ipAddress, CancellationToken cancellationToken,
+        bool mfaVerified = false, string authenticationMethod = "pwd")
     {
         var settings = options.Value;
         var now = clock.UtcNow;
         user.RegisterSuccessfulLogin(now);
         var session = UserSession.Start(user.Id, now, TimeSpan.FromDays(settings.SessionAbsoluteDays), userAgent, ipAddress);
+        session.SetAuthenticationMethod(authenticationMethod);
+        if (mfaVerified)
+        {
+            session.RecordMfa(now);
+        }
+
         var rawRefresh = RefreshTokens.Create(tenantId);
         var refresh = session.IssueRefreshToken(RefreshTokens.Hash(rawRefresh), now, TimeSpan.FromDays(settings.RefreshTokenDays));
         db.Sessions.Add(session);
         await db.SaveChangesAsync(cancellationToken);
-        var access = tokens.CreateAccessToken(user, tenantId, session.Id);
+        var access = tokens.CreateAccessToken(user, tenantId, session);
         return new SignInResult(access.Token, access.ExpiresAtUtc, rawRefresh, refresh.ExpiresAtUtc, user.Id, tenantId, user.DisplayName);
     }
 }
@@ -65,10 +75,10 @@ public sealed class SessionRevoker(IIdentityDbContext db, IIdentityCache cache, 
         foreach (var session in sessions)
         {
             session.Revoke(reason, now);
-            cache.InvalidateSession(session.Id);
+            await cache.InvalidateSessionAsync(session.Id);
         }
 
-        cache.InvalidateUser(userId);
+        await cache.InvalidateUserAsync(userId);
     }
 }
 
@@ -135,7 +145,7 @@ public sealed class VerifyMfaHandler(
             return user.IsLockedOut(now) ? IdentityErrors.LockedOut : IdentityErrors.MfaInvalidCode;
         }
 
-        return await sessions.IssueAsync(user, tenantId, command.UserAgent, command.IpAddress, cancellationToken);
+        return await sessions.IssueAsync(user, tenantId, command.UserAgent, command.IpAddress, cancellationToken, mfaVerified: true);
     }
 }
 
@@ -145,6 +155,63 @@ internal static class MfaCodes
     {
         var secret = Base32.Decode(secrets.Unprotect(user.MfaSecretProtected!));
         return Totp.Verify(secret, code, now, out var step) && user.AcceptTimeStep(step);
+    }
+}
+
+// ---------- MFA: step-up re-authentication before sensitive actions ----------
+public sealed record StepUpDto(string AccessToken, DateTime AccessTokenExpiresAtUtc, DateTime MfaVerifiedAtUtc);
+
+public sealed record StepUpCommand(string? Code, string? RecoveryCode) : ICommand<StepUpDto>;
+
+public sealed class StepUpValidator : AbstractValidator<StepUpCommand>
+{
+    public StepUpValidator() =>
+        RuleFor(x => x).Must(x => !string.IsNullOrWhiteSpace(x.Code) || !string.IsNullOrWhiteSpace(x.RecoveryCode))
+            .WithName("code").WithMessage("Provide a verification code or a recovery code.");
+}
+
+/// <summary>
+/// Verifies the second factor again for the current session and returns a fresh access token carrying <c>mfa_at</c>.
+/// Failed codes count towards the account lockout.
+/// </summary>
+public sealed class StepUpHandler(IIdentityDbContext db, ICurrentUser currentUser, ISecretProtector secrets, ITokenService tokens, ITenantContext tenant, IClock clock)
+    : ICommandHandler<StepUpCommand, StepUpDto>
+{
+    public async Task<Result<StepUpDto>> Handle(StepUpCommand command, CancellationToken cancellationToken)
+    {
+        var user = await db.Users.FirstAsync(u => u.Id == currentUser.UserId, cancellationToken);
+        var session = await db.Sessions.FirstOrDefaultAsync(s => s.Id == currentUser.SessionId, cancellationToken);
+        var now = clock.UtcNow;
+        if (session is null || !session.IsActive(now))
+        {
+            return IdentityErrors.SessionRevoked;
+        }
+
+        if (!user.MfaEnabled)
+        {
+            return IdentityErrors.MfaNotEnabled;
+        }
+
+        if (user.IsLockedOut(now))
+        {
+            return IdentityErrors.LockedOut;
+        }
+
+        var accepted = !string.IsNullOrWhiteSpace(command.Code)
+            ? MfaCodes.VerifyTotp(user, secrets, command.Code, now)
+            : user.UseRecoveryCode(RecoveryCodes.Hash(command.RecoveryCode!));
+        if (!accepted)
+        {
+            user.RegisterFailedLogin(now);
+            await db.SaveChangesAsync(cancellationToken);
+            return user.IsLockedOut(now) ? IdentityErrors.LockedOut : IdentityErrors.MfaInvalidCode;
+        }
+
+        user.ResetFailedAttempts();
+        session.RecordMfa(now);
+        await db.SaveChangesAsync(cancellationToken);
+        var access = tokens.CreateAccessToken(user, tenant.TenantId!.Value, session);
+        return new StepUpDto(access.Token, access.ExpiresAtUtc, now);
     }
 }
 
@@ -450,7 +517,7 @@ public sealed class ReactivateUserHandler(IIdentityDbContext db, IIdentityCache 
 
         user.Activate();
         await db.SaveChangesAsync(cancellationToken);
-        cache.InvalidateUser(user.Id);
+        await cache.InvalidateUserAsync(user.Id);
         return IdentityMapping.ToDto(user);
     }
 }

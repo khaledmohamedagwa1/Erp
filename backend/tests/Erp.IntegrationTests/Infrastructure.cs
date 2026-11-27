@@ -112,8 +112,16 @@ public sealed class ErpApiFixture : IAsyncLifetime
             builder.UseSetting("Serilog:MinimumLevel:Default", "Warning");
             builder.UseSetting("OpenApi:Enabled", "true");
             builder.UseSetting("Documents:Attachments:LocalRoot", AttachmentRoot);
-            builder.UseSetting("Hosting:CorsAllowedOrigins:0", AllowedOrigin);            builder.ConfigureTestServices(services =>
+            builder.UseSetting("Hosting:CorsAllowedOrigins:0", AllowedOrigin);
+
+            // Existing scenarios sign in without MFA; step-up itself is covered by SecurityTests with an enrolled user.
+            builder.UseSetting("Auth:StepUp:AllowWithoutMfa", "true");
+            builder.UseSetting("Auth:PlatformTokenMinutes", "480");
+            builder.UseSetting($"Auth:Oidc:Secrets:{FakeOidcProvider.SecretName}", FakeOidcProvider.ClientSecret);
+            builder.ConfigureTestServices(services =>
             {
+                services.AddHttpClient(Erp.Modules.Identity.Infrastructure.OidcClient.HttpClientName)
+                    .ConfigurePrimaryHttpMessageHandler(() => new FakeOidcHandler(FakeOidcProvider.Instance));
                 services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedRecorder>();
                 services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedInboxCounter>();
                 services.AddSingleton<INotificationSender, RecordingNotificationSender>();
@@ -166,7 +174,7 @@ public sealed class ErpApiFixture : IAsyncLifetime
         var email = $"admin@{code.ToLowerInvariant()}.example";
         const string password = "Str0ng-Passw0rd!";
         using var platform = CreateClient();
-        platform.DefaultRequestHeaders.Add("X-Platform-Key", PlatformKey);
+        platform.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", await OperatorTokenAsync());
         var provisioned = await platform.PostAsJsonAsync("/api/platform/tenants", new
         {
             tenantCode = code, tenantName = "Tenant " + code, companyCode, companyNameEn = "Company", companyNameAr = "شركة",
@@ -179,6 +187,51 @@ public sealed class ErpApiFixture : IAsyncLifetime
         await SignInAsync(client, code, email, password);
         return new TenantSession(client, body.GetProperty("tenantId").GetGuid(), body.GetProperty("companyId").GetGuid(),
             body.GetProperty("administratorUserId").GetGuid(), code, email, password);
+    }
+
+    public const string OperatorEmail = "operator@platform.test";
+    public const string OperatorPassword = "Operat0r-Passw0rd!";
+
+    private readonly SemaphoreSlim _operatorLock = new(1, 1);
+    private string? _operatorToken;
+
+    /// <summary>TOTP secret of the bootstrap operator (base32), available after the first <see cref="OperatorTokenAsync"/>.</summary>
+    public string? OperatorMfaSecret { get; private set; }
+
+    /// <summary>Bootstraps the first platform operator with the static key (once) and signs it in with password + TOTP.</summary>
+    public async Task<string> OperatorTokenAsync()
+    {
+        await _operatorLock.WaitAsync();
+        try
+        {
+            if (_operatorToken is not null)
+            {
+                return _operatorToken;
+            }
+
+            using var client = CreateClient();
+            client.DefaultRequestHeaders.Add("X-Platform-Key", PlatformKey);
+            var bootstrap = await client.PostAsJsonAsync("/api/platform/operators/bootstrap",
+                new { email = OperatorEmail, displayName = "Platform operator", password = OperatorPassword });
+            bootstrap.EnsureSuccessStatusCode();
+            OperatorMfaSecret = (await bootstrap.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("mfaSecret").GetString();
+            _operatorToken = await OperatorLoginAsync(client, OperatorEmail, OperatorPassword, OperatorMfaSecret!, 0);
+            return _operatorToken;
+        }
+        finally
+        {
+            _operatorLock.Release();
+        }
+    }
+
+    /// <summary>Signs an operator in; <paramref name="stepOffset"/> picks another TOTP step (each step is accepted once).</summary>
+    public static async Task<string> OperatorLoginAsync(HttpClient client, string email, string password, string mfaSecret, int stepOffset)
+    {
+        var code = Erp.Modules.Identity.Application.Totp.Compute(Erp.Modules.Identity.Application.Base32.Decode(mfaSecret),
+            Erp.Modules.Identity.Application.Totp.TimeStep(DateTime.UtcNow) + stepOffset);
+        var login = await client.PostAsJsonAsync("/api/platform/auth/login", new { email, password, code });
+        login.EnsureSuccessStatusCode();
+        return (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString()!;
     }
 
     public static async Task SignInAsync(HttpClient client, string tenantCode, string email, string password)

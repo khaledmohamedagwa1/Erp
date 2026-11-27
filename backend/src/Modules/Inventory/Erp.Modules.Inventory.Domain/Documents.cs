@@ -90,7 +90,7 @@ public enum OpeningStockStatus
 
 /// <summary>Opening stock: Draft → Review → Approval → Posting (Part 7.5).</summary>
 [Audited]
-public sealed class OpeningStockDocument : AggregateRoot, ICompanyScoped
+public sealed class OpeningStockDocument : AggregateRoot, IWarehouseScoped
 {
     private OpeningStockDocument()
     {
@@ -197,7 +197,7 @@ public enum AdjustmentStatus
 
 /// <summary>Stock adjustment: positive lines are gains, negative lines losses. Draft → Approved → Posted.</summary>
 [Audited]
-public sealed class StockAdjustment : AggregateRoot, ICompanyScoped
+public sealed class StockAdjustment : AggregateRoot, IWarehouseScoped
 {
     private StockAdjustment()
     {
@@ -470,7 +470,7 @@ public sealed class StockCountLine
 /// Lines left uncounted are ignored. Serial-tracked products are counted through adjustments, not counts.
 /// </summary>
 [Audited]
-public sealed class StockCount : AggregateRoot, ICompanyScoped
+public sealed class StockCount : AggregateRoot, IWarehouseScoped
 {
     private StockCount()
     {

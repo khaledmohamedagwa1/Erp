@@ -34,6 +34,10 @@ data:
   {{- if .Values.pdf.gotenberg.enabled }}
   Pdf__GotenbergUrl: {{ printf "http://%s-gotenberg:3000" (include "erp.fullname" .) | quote }}
   {{- end }}
+  ErpCache__Provider: {{ .Values.cache.provider | quote }}
+  {{- if .Values.cache.bundledRedis.enabled }}
+  ErpCache__RedisConnection: {{ printf "%s-redis:6379,abortConnect=false" (include "erp.fullname" .) | quote }}
+  {{- end }}
   {{- range $key, $value := .Values.config.extraEnv }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}

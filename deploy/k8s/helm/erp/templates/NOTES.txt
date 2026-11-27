@@ -1,6 +1,7 @@
 ERP {{ .Chart.AppVersion }} deployed as release {{ .Release.Name }}.
 
-Secrets are read from the Secret "{{ .Values.secrets.existingSecret }}" (keys: ConnectionStrings__Erp, Auth__SigningKeyPem, optional Platform__ApiKey).
+Secrets are read from the Secret "{{ .Values.secrets.existingSecret }}" (keys: ConnectionStrings__Erp, Auth__SigningKeyPem, optional Platform__ApiKey — first-operator bootstrap only — ErpCache__RedisConnection, Auth__Oidc__Secrets__<name>).
+Cache provider: {{ .Values.cache.provider }}{{ if .Values.cache.bundledRedis.enabled }} (bundled Redis {{ include "erp.fullname" . }}-redis){{ end }}.
 {{- if not .Values.migrations.enabled }}
 
 Schema migrations are NOT run by this chart (migrations.enabled=false). Run them explicitly before the pods become ready:

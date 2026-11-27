@@ -5,7 +5,9 @@ using Erp.Application.Abstractions;
 using Erp.Infrastructure.Auditing;
 using Erp.SharedKernel.Domain;
 using Microsoft.EntityFrameworkCore;
+using Erp.SharedKernel.Results;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.EntityFrameworkCore.Query;
 
 namespace Erp.Infrastructure.Persistence;
 
@@ -15,7 +17,8 @@ public sealed record ErpDbContextDependencies(
     ICurrentUser CurrentUser,
     IClock Clock,
     ErpDbSession Session,
-    IAuditWriter AuditWriter);
+    IAuditWriter AuditWriter,
+    IDataScope DataScope);
 
 /// <summary>
 /// Base for every module DbContext. Applies, by convention:
@@ -46,6 +49,18 @@ public abstract class ErpDbContext : DbContext
     public Guid CurrentTenantId => _deps?.TenantContext.TenantId ?? Guid.Empty;
 
     public Guid CurrentCompanyId => _deps?.TenantContext.CompanyId ?? Guid.Empty;
+
+    // Branch/warehouse data scope of the request (unrestricted outside user requests).
+    public bool ScopeRestrictsBranches => _deps?.DataScope.RestrictsBranches ?? false;
+
+    public bool ScopeRestrictsWarehouses => _deps?.DataScope.RestrictsWarehouses ?? false;
+
+    public IReadOnlyList<Guid> ScopeBranchIds => _deps?.DataScope.BranchIds ?? [];
+
+    public IReadOnlyList<Guid> ScopeWarehouseIds => _deps?.DataScope.WarehouseIds ?? [];
+
+    public const string BranchIdProperty = "BranchId";
+    public const string WarehouseIdProperty = "WarehouseId";
 
     protected sealed override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -117,16 +132,57 @@ public abstract class ErpDbContext : DbContext
     private LambdaExpression BuildFilter<TEntity>()
         where TEntity : class
     {
+        Expression<Func<TEntity, bool>> filter;
         if (typeof(ICompanyScoped).IsAssignableFrom(typeof(TEntity)))
         {
-            Expression<Func<TEntity, bool>> companyFilter = e =>
+            filter = e =>
                 EF.Property<Guid>(e, TenantIdProperty) == CurrentTenantId &&
                 EF.Property<Guid>(e, nameof(ICompanyScoped.CompanyId)) == CurrentCompanyId;
-            return companyFilter;
+        }
+        else
+        {
+            filter = e => EF.Property<Guid>(e, TenantIdProperty) == CurrentTenantId;
         }
 
-        Expression<Func<TEntity, bool>> tenantFilter = e => EF.Property<Guid>(e, TenantIdProperty) == CurrentTenantId;
-        return tenantFilter;
+        if (typeof(IBranchScoped).IsAssignableFrom(typeof(TEntity)))
+        {
+            filter = And(filter, ScopeFilter<TEntity>(BranchIdProperty, branch: true));
+        }
+
+        if (typeof(IWarehouseScoped).IsAssignableFrom(typeof(TEntity)))
+        {
+            filter = And(filter, ScopeFilter<TEntity>(WarehouseIdProperty, branch: false));
+        }
+
+        return filter;
+    }
+
+    private Expression<Func<TEntity, bool>> ScopeFilter<TEntity>(string property, bool branch)
+        where TEntity : class
+    {
+        var clrProperty = typeof(TEntity).GetProperty(property)
+            ?? throw new InvalidOperationException($"{typeof(TEntity).Name} is data-scoped but has no {property} property.");
+        if (clrProperty.PropertyType == typeof(Guid?))
+        {
+            return branch
+                ? e => !ScopeRestrictsBranches || EF.Property<Guid?>(e, property) == null || ScopeBranchIds.Contains(EF.Property<Guid?>(e, property)!.Value)
+                : e => !ScopeRestrictsWarehouses || EF.Property<Guid?>(e, property) == null || ScopeWarehouseIds.Contains(EF.Property<Guid?>(e, property)!.Value);
+        }
+
+        if (clrProperty.PropertyType == typeof(Guid))
+        {
+            return branch
+                ? e => !ScopeRestrictsBranches || ScopeBranchIds.Contains(EF.Property<Guid>(e, property))
+                : e => !ScopeRestrictsWarehouses || ScopeWarehouseIds.Contains(EF.Property<Guid>(e, property));
+        }
+
+        throw new InvalidOperationException($"{typeof(TEntity).Name}.{property} must be a Guid or Guid? to be data-scoped.");
+    }
+
+    private static Expression<Func<T, bool>> And<T>(Expression<Func<T, bool>> left, Expression<Func<T, bool>> right)
+    {
+        var body = ReplacingExpressionVisitor.Replace(right.Parameters[0], left.Parameters[0], right.Body);
+        return Expression.Lambda<Func<T, bool>>(Expression.AndAlso(left.Body, body), left.Parameters);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess) =>
@@ -140,6 +196,7 @@ public abstract class ErpDbContext : DbContext
         }
 
         ApplyOwnershipAndStamps();
+        EnforceDataScope();
         var audit = CaptureAudit();
         WriteOutbox();
 
@@ -223,6 +280,40 @@ public abstract class ErpDbContext : DbContext
                 entry.Property("ModifiedAtUtc").CurrentValue = now;
                 entry.Property("ModifiedBy").CurrentValue = userId;
             }
+        }
+    }
+
+    /// <summary>A restricted user cannot create a document for, or move one into, a branch/warehouse outside their scope.</summary>
+    private void EnforceDataScope()
+    {
+        var scope = _deps!.DataScope;
+        if (!scope.RestrictsBranches && !scope.RestrictsWarehouses)
+        {
+            return;
+        }
+
+        foreach (var entry in ChangeTracker.Entries().Where(e => e.State is EntityState.Added or EntityState.Modified))
+        {
+            if (entry.Entity is IBranchScoped && Violates(entry, BranchIdProperty, scope.AllowsBranch))
+            {
+                throw new DomainException(Error.Forbidden("data-scope.denied", "You do not have access to this branch."));
+            }
+
+            if (entry.Entity is IWarehouseScoped && Violates(entry, WarehouseIdProperty, scope.AllowsWarehouse))
+            {
+                throw new DomainException(Error.Forbidden("data-scope.denied", "You do not have access to this warehouse."));
+            }
+        }
+
+        static bool Violates(EntityEntry entry, string property, Func<Guid?, bool> allows)
+        {
+            var value = entry.Property(property);
+            if (entry.State == EntityState.Modified && !value.IsModified)
+            {
+                return false;
+            }
+
+            return !allows(value.CurrentValue as Guid?);
         }
     }
 

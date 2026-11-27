@@ -120,3 +120,35 @@ public interface IIntegrationEventHandler<in TEvent>
 {
     Task HandleAsync(TEvent integrationEvent, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// The branch/warehouse data scope of the current request: the user's limits within the active company. Unrestricted for
+/// background work, system scopes and users holding the "all data scopes" permission. Set only by infrastructure.
+/// Applied as query filters to <c>IBranchScoped</c>/<c>IWarehouseScoped</c> documents and checked when they are saved.
+/// </summary>
+public interface IDataScope
+{
+    bool RestrictsBranches { get; }
+
+    bool RestrictsWarehouses { get; }
+
+    IReadOnlyList<Guid> BranchIds { get; }
+
+    IReadOnlyList<Guid> WarehouseIds { get; }
+
+    bool AllowsBranch(Guid? branchId);
+
+    bool AllowsWarehouse(Guid? warehouseId);
+
+    /// <summary>Limits the scope to the user's access in the active company (empty lists mean all).</summary>
+    void Restrict(CompanyAccess access);
+}
+
+/// <summary>Platform-operator accounts (SaaS operators who provision tenants). Implemented by the Identity module.</summary>
+public interface IPlatformOperatorDirectory
+{
+    Task<bool> IsActiveAsync(Guid operatorId, CancellationToken cancellationToken = default);
+
+    /// <summary>Appends to the platform audit log (committed on its own, after the action).</summary>
+    Task RecordAsync(Guid? operatorId, string action, string? details, string? ipAddress, CancellationToken cancellationToken = default);
+}

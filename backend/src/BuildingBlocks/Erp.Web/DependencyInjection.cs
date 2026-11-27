@@ -2,6 +2,7 @@ using System.Globalization;
 using Erp.Application;
 using Erp.Application.Abstractions;
 using Erp.Infrastructure;
+using Erp.Web.Hosting;
 using Erp.Web.Http;
 using Erp.Web.Modules;
 using Erp.Web.Security;
@@ -21,6 +22,8 @@ public static class DependencyInjection
         services.AddErpInfrastructure(configuration);
         services.AddHttpContextAccessor();
         services.AddMemoryCache();
+        services.AddErpCaching(configuration);
+        services.AddOptions<StepUpOptions>().Bind(configuration.GetSection(StepUpOptions.SectionName));
         services.AddScoped<ICurrentUser, HttpCurrentUser>();
         services.AddProblemDetails();
         services.AddExceptionHandler<ErpExceptionHandler>();

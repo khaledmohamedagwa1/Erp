@@ -61,6 +61,9 @@ services:
       Documents__Attachments__LocalRoot: /var/lib/erp/files/attachments
       # Empty = no PDF output (501). With --profile pdf: http://gotenberg:3000
       Pdf__GotenbergUrl: ${PDF_GOTENBERG_URL:-}
+      # Memory (default) or Redis — start the "redis" profile and set ERP_CACHE_PROVIDER=Redis to try the shared cache.
+      ErpCache__Provider: ${ERP_CACHE_PROVIDER:-Memory}
+      ErpCache__RedisConnection: redis:6379,abortConnect=false
     volumes:
       - files:/var/lib/erp/files
     ports:
@@ -81,6 +84,12 @@ services:
     image: ${ERP_GOTENBERG_IMAGE:-gotenberg/gotenberg:8}
     command: ["gotenberg", "--api-timeout=60s", "--chromium-disable-javascript=true", "--chromium-allow-list=file:///tmp/.*"]
     security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  redis:
+    profiles: ["redis"]
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
     restart: unless-stopped
 
 volumes:

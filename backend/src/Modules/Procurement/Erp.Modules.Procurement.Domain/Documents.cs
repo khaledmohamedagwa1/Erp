@@ -65,7 +65,7 @@ public enum PurchaseRequestStatus
 public sealed record RequestLine(Guid LineId, Guid ProductId, Guid? VariantId, Guid UomId, decimal Quantity, DateOnly? NeededBy, string? Notes);
 
 [Audited]
-public sealed class PurchaseRequest : AggregateRoot, ICompanyScoped
+public sealed class PurchaseRequest : AggregateRoot, IWarehouseScoped
 {
     private PurchaseRequest()
     {
@@ -298,7 +298,7 @@ public sealed record PurchaseOrderLine(
 }
 
 [Audited]
-public sealed class PurchaseOrder : AggregateRoot, ICompanyScoped
+public sealed class PurchaseOrder : AggregateRoot, IBranchScoped, IWarehouseScoped
 {
     private PurchaseOrder()
     {
@@ -615,7 +615,7 @@ public sealed record GoodsReceiptLine(
 }
 
 [Audited]
-public sealed class GoodsReceipt : AggregateRoot, ICompanyScoped
+public sealed class GoodsReceipt : AggregateRoot, IWarehouseScoped
 {
     /// <summary>Counter role of lines received against an earlier invoice (already invoiced, nothing to clear in GRNI).</summary>
     public const string GoodsInvoicedNotReceivedRole = "GoodsInvoicedNotReceived";

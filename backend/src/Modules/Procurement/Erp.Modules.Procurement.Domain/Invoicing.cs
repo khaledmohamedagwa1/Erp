@@ -276,7 +276,7 @@ public sealed record PurchaseReturnLine(
     decimal GrniBase = 0);
 
 [Audited]
-public sealed class PurchaseReturn : AggregateRoot, ICompanyScoped
+public sealed class PurchaseReturn : AggregateRoot, IWarehouseScoped
 {
     private PurchaseReturn()
     {

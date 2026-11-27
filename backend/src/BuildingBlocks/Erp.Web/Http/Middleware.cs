@@ -5,6 +5,7 @@ using Erp.Web.Security;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Erp.Web.Http;
@@ -84,12 +85,33 @@ public sealed class TenantResolutionMiddleware(RequestDelegate next)
             }
 
             tenantContext.SetCompany(companyId);
+            await ApplyDataScopeAsync(context, currentUser.UserId.Value, companyId, access);
         }
 
         using (logger.BeginScope(new Dictionary<string, object?> { ["TenantId"] = tenantId, ["UserId"] = currentUser.UserId }))
         {
             await next(context);
         }
+    }
+
+    /// <summary>Permission that exempts a user from branch/warehouse scopes (declared by the Identity module).</summary>
+    public const string AllDataScopesPermission = "identity.scope.all";
+
+    private static async Task ApplyDataScopeAsync(HttpContext context, Guid userId, Guid companyId, IUserAccessService access)
+    {
+        var companyAccess = await access.GetCompanyAccessAsync(userId, companyId, context.RequestAborted);
+        if (companyAccess is null || (companyAccess.AllBranches && companyAccess.AllWarehouses))
+        {
+            return;
+        }
+
+        var permissions = context.RequestServices.GetRequiredService<IPermissionService>();
+        if (await permissions.HasPermissionAsync(userId, AllDataScopesPermission, context.RequestAborted))
+        {
+            return;
+        }
+
+        context.RequestServices.GetRequiredService<IDataScope>().Restrict(companyAccess);
     }
 
     private static Task Write(HttpContext context, Error error) => error.ToProblem().ExecuteAsync(context);

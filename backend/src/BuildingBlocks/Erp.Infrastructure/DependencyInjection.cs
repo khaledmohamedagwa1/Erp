@@ -29,6 +29,7 @@ public static class DependencyInjection
         services.AddSingleton<IClock, SystemClock>();
         services.AddScoped<TenantContext>();
         services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<TenantContext>());
+        services.AddScoped<IDataScope, DataScope>();
         services.AddScoped<ErpDbSession>();
         services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<ErpDbSession>());
         services.AddScoped<TenantSessionContextInterceptor>();

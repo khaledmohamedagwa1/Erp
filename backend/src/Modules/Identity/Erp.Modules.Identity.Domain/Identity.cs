@@ -367,12 +367,23 @@ public sealed class UserSession : AggregateRoot, ITenantScoped
 
     public string? IpAddress { get; private set; }
 
+    /// <summary>Last second-factor verification in this session (MFA at sign-in or a step-up). Carried into refreshed tokens.</summary>
+    public DateTime? LastMfaAtUtc { get; private set; }
+
+    /// <summary>How the session was started: "pwd" (password) or "ext:{provider}" (external identity provider).</summary>
+    public string AuthenticationMethod { get; private set; } = "pwd";
+
     public IReadOnlyCollection<RefreshToken> Tokens => _tokens.AsReadOnly();
 
     public bool IsActive(DateTime nowUtc) => RevokedAtUtc is null && AbsoluteExpiresAtUtc > nowUtc;
 
     public static UserSession Start(Guid userId, DateTime nowUtc, TimeSpan absoluteLifetime, string? userAgent, string? ipAddress) =>
         new(SequentialGuid.New(), userId, nowUtc, nowUtc.Add(absoluteLifetime), userAgent, ipAddress);
+
+    public void RecordMfa(DateTime nowUtc) => LastMfaAtUtc = nowUtc;
+
+    public void SetAuthenticationMethod(string method) =>
+        AuthenticationMethod = Guard.MaxLength(Guard.NotEmpty(method, "identity.auth-method-required", "Authentication method"), 60, "identity.auth-method-too-long", "Authentication method");
 
     public RefreshToken IssueRefreshToken(string tokenHash, DateTime nowUtc, TimeSpan lifetime)
     {

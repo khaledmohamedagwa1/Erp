@@ -19,6 +19,12 @@ public sealed class IdentityDbContext(DbContextOptions<IdentityDbContext> option
 
     public DbSet<UserSession> Sessions => Set<UserSession>();
 
+    public DbSet<ExternalIdentityProvider> IdentityProviders => Set<ExternalIdentityProvider>();
+
+    public DbSet<PlatformOperator> PlatformOperators => Set<PlatformOperator>();
+
+    public DbSet<PlatformAuditEntry> PlatformAudit => Set<PlatformAuditEntry>();
+
     protected override void ConfigureModel(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<User>(b =>
@@ -75,10 +81,57 @@ public sealed class IdentityDbContext(DbContextOptions<IdentityDbContext> option
             b.Property(x => x.RevokedReason).HasMaxLength(50);
             b.Property(x => x.UserAgent).HasMaxLength(300);
             b.Property(x => x.IpAddress).HasMaxLength(64);
+            b.Property(x => x.LastMfaAtUtc).HasPrecision(3);
+            b.Property(x => x.AuthenticationMethod).HasMaxLength(60).HasDefaultValue("pwd");
             b.HasIndex(x => x.UserId);
             b.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.NoAction);
             b.HasMany(x => x.Tokens).WithOne().HasForeignKey(x => x.SessionId).OnDelete(DeleteBehavior.Cascade);
             b.Navigation(x => x.Tokens).UsePropertyAccessMode(PropertyAccessMode.Field);
+        });
+
+        modelBuilder.Entity<ExternalIdentityProvider>(b =>
+        {
+            b.ToTable("ExternalIdentityProvider");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.Key).HasMaxLength(40).IsRequired();
+            b.Property(x => x.DisplayName).HasMaxLength(100).IsRequired();
+            b.Property(x => x.Authority).HasMaxLength(300).IsRequired();
+            b.Property(x => x.ClientId).HasMaxLength(200).IsRequired();
+            b.Property(x => x.ClientSecretName).HasMaxLength(100);
+            b.Property(x => x.Scopes).HasMaxLength(300).IsRequired();
+            b.Property(x => x.EmailClaim).HasMaxLength(100).IsRequired();
+            b.HasIndex(TenantIdProperty, nameof(ExternalIdentityProvider.Key)).IsUnique();
+        });
+
+        modelBuilder.Entity<PlatformOperator>(b =>
+        {
+            b.ToTable("PlatformOperator");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.Email).HasMaxLength(256).IsRequired();
+            b.Property(x => x.NormalizedEmail).HasMaxLength(256).IsRequired();
+            b.Property(x => x.DisplayName).HasMaxLength(200).IsRequired();
+            b.Property(x => x.PasswordHash).HasMaxLength(500).IsRequired();
+            b.Property(x => x.MfaSecretProtected).HasMaxLength(1000).IsRequired();
+            b.Property(x => x.LockoutEndUtc).HasPrecision(3);
+            b.Property(x => x.LastLoginAtUtc).HasPrecision(3);
+            b.HasIndex(x => x.NormalizedEmail).IsUnique();
+
+            // Only one operator can ever be created with the static bootstrap key, even under concurrent requests.
+            b.HasIndex(x => x.IsBootstrap).IsUnique().HasFilter("[IsBootstrap] = 1");
+        });
+
+        modelBuilder.Entity<PlatformAuditEntry>(b =>
+        {
+            b.ToTable("PlatformAuditEntry");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).UseIdentityColumn();
+            b.Property(x => x.AtUtc).HasPrecision(3);
+            b.Property(x => x.Action).HasMaxLength(100).IsRequired();
+            b.Property(x => x.Details).HasMaxLength(2000);
+            b.Property(x => x.IpAddress).HasMaxLength(64);
+            b.HasIndex(x => x.AtUtc);
         });
 
         modelBuilder.Entity<RefreshToken>(b =>

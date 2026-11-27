@@ -6,6 +6,7 @@ using Erp.Infrastructure.Outbox;
 using Erp.Modules.Accounting.Application;
 using Erp.Modules.Accounting.Contracts;
 using Erp.Web.Http;
+using Erp.Web.Security;
 using Erp.Web.Modules;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -109,14 +110,17 @@ public sealed class AccountingModule : IErpModule
             .RequirePermission(AccountingPermissions.PeriodManage);
         g.MapPut("/periods/{id:guid}/status", async (Guid id, PeriodStatusRequest body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new SetPeriodStatusCommand(id, body.Status), ct)).ToHttpResult())
-            .RequirePermission(AccountingPermissions.PeriodManage);
+            .RequirePermission(AccountingPermissions.PeriodManage)
+            .RequireStepUp();
         g.MapPost("/fiscal-years/{id:guid}/close", async (Guid id, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new CloseFiscalYearCommand(id), ct)).ToHttpResult())
-            .RequirePermission(AccountingPermissions.YearEndClose);
+            .RequirePermission(AccountingPermissions.YearEndClose)
+            .RequireStepUp();
         g.MapPost("/fiscal-years/{id:guid}/reopen", async (Guid id, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new ReopenFiscalYearCommand(id), ct)).ToHttpResult())
             .RequirePermission(AccountingPermissions.YearEndClose)
-            .RequirePermission(AccountingPermissions.PeriodManage);
+            .RequirePermission(AccountingPermissions.PeriodManage)
+            .RequireStepUp();
 
         // Opening balances
         g.MapGet("/opening-balances", async (Guid? legalEntityId, IDispatcher d, CancellationToken ct) =>
@@ -130,7 +134,8 @@ public sealed class AccountingModule : IErpModule
             .RequirePermission(AccountingPermissions.OpeningBalanceManage);
         g.MapPost("/opening-balances/{id:guid}/reverse", async (Guid id, ReverseRequest body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new ReverseOpeningBalanceCommand(id, body.ReversalDate), ct)).ToHttpResult())
-            .RequirePermission(AccountingPermissions.OpeningBalanceManage);
+            .RequirePermission(AccountingPermissions.OpeningBalanceManage)
+            .RequireStepUp();
 
         // Readiness
         g.MapGet("/readiness", async (Guid legalEntityId, string? roles, IDispatcher d, CancellationToken ct) =>
@@ -164,7 +169,8 @@ public sealed class AccountingModule : IErpModule
             .RequirePermission(AccountingPermissions.JournalPost);
         g.MapPost("/journals/{id:guid}/reverse", async (Guid id, ReverseRequest body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new ReverseJournalCommand(id, body.ReversalDate), ct)).ToHttpResult())
-            .RequirePermission(AccountingPermissions.JournalReverse);
+            .RequirePermission(AccountingPermissions.JournalReverse)
+            .RequireStepUp();
 
         // Reports
         g.MapGet("/reports/trial-balance", async (Guid legalEntityId, DateOnly from, DateOnly to, IDispatcher d, CancellationToken ct) =>
