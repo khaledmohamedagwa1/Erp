@@ -5,6 +5,7 @@ using Erp.Modules.Accounting.Infrastructure;
 using Erp.Modules.Finance.Infrastructure;
 using Erp.Modules.Inventory.Infrastructure;
 using Erp.Modules.Manufacturing.Infrastructure;
+using Erp.Modules.Procurement.Infrastructure;
 using Erp.Modules.Configuration.Infrastructure;
 using Erp.Modules.Tax.Infrastructure;
 using Erp.Modules.Identity.Infrastructure;
@@ -26,7 +27,7 @@ var command = args.FirstOrDefault() ?? "migrate";
 var options = ParseOptions(args.Skip(1).ToArray());
 
 var builder = Host.CreateApplicationBuilder(args);
-IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule(), new PartiesModule(), new TaxModule(), new CatalogModule(), new AccountingModule(), new FinanceModule(), new InventoryModule(), new WorkflowModule(), new ManufacturingModule()];
+IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule(), new PartiesModule(), new TaxModule(), new CatalogModule(), new AccountingModule(), new FinanceModule(), new InventoryModule(), new WorkflowModule(), new ManufacturingModule(), new ProcurementModule()];
 builder.Services.AddErpPlatform(builder.Configuration, modules);
 using var host = builder.Build();
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Erp.Migrator");
