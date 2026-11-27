@@ -6,6 +6,7 @@ using Erp.Infrastructure;
 using Erp.Infrastructure.Outbox;
 using Erp.Modules.Identity.Application;
 using Erp.Modules.Identity.Contracts;
+using Erp.Modules.Identity.Domain;
 using Erp.SharedKernel.Results;
 using Erp.Web.Http;
 using Erp.Web.Modules;
@@ -32,6 +33,20 @@ public sealed record CompanyAccessRequest(bool Granted, IReadOnlyCollection<Guid
 public sealed record RoleRequest(string Name, IReadOnlyCollection<string>? Permissions);
 
 public sealed record PermissionsRequest(IReadOnlyCollection<string> Permissions);
+
+public sealed record MfaChallengeResponse(bool MfaRequired, string MfaToken, int ExpiresInSeconds);
+
+public sealed record MfaVerifyRequest(string MfaToken, string? Code, string? RecoveryCode);
+
+public sealed record MfaCodeRequest(string Code);
+
+public sealed record MfaDisableRequest(string Password, string Code);
+
+public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+
+public sealed record CompletePasswordChangeRequest(string PasswordChangeToken, string NewPassword);
+
+public sealed record ResetPasswordRequest(string? TemporaryPassword);
 
 public sealed class IdentityModule : IErpModule
 {
@@ -75,6 +90,10 @@ public sealed class IdentityModule : IErpModule
         services.AddScoped<IUserAccessService, UserAccessService>();
         services.AddScoped<IPermissionService, PermissionService>();
         services.AddScoped<IIdentityProvisioning, IdentityProvisioning>();
+        services.AddScoped<ISessionIssuer, SessionIssuer>();
+        services.AddScoped<SessionRevoker>();
+        services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();
+        services.AddSingleton<IChallengeTokens, DataProtectionChallengeTokens>();
         services.AddHandlersFromAssembly(typeof(IIdentityDbContext).Assembly);
         services.AddSingleton(new EventAssembly(typeof(Domain.User).Assembly));
 
@@ -91,8 +110,61 @@ public sealed class IdentityModule : IErpModule
         {
             var result = await d.Send(new LoginCommand(body.TenantCode, body.Email, body.Password,
                 http.Request.Headers.UserAgent.ToString(), http.Connection.RemoteIpAddress?.ToString()), ct);
+            if (result.IsFailure)
+            {
+                return result.Error.ToProblem();
+            }
+
+            var outcome = result.Value;
+            http.Response.Headers.CacheControl = "no-store";
+            if (outcome.PasswordChangeRequired)
+            {
+                // 403 with a short-lived token for POST /auth/password/complete-change.
+                return Results.Problem(
+                    title: ErrorLocalizer.Title(IdentityErrors.PasswordChangeRequired.Code, IdentityErrors.PasswordChangeRequired.Message),
+                    detail: IdentityErrors.PasswordChangeRequired.Message,
+                    statusCode: StatusCodes.Status403Forbidden,
+                    type: $"https://errors.erp.local/{IdentityErrors.PasswordChangeRequired.Code}",
+                    extensions: new Dictionary<string, object?>
+                    {
+                        ["code"] = IdentityErrors.PasswordChangeRequired.Code,
+                        ["passwordChangeToken"] = outcome.PasswordChangeToken,
+                    });
+            }
+
+            if (outcome.MfaRequired)
+            {
+                return Results.Ok(new MfaChallengeResponse(true, outcome.MfaChallengeToken!,
+                    (int)DataProtectionChallengeTokens.Lifetime(ChallengePurpose.Mfa).TotalSeconds));
+            }
+
+            return Respond(outcome.Session!, http, options.Value);
+        }).AllowAnonymous().RequireRateLimiting("auth");
+
+        auth.MapPost("/mfa/verify", async (MfaVerifyRequest body, HttpContext http, IDispatcher d, IOptions<AuthOptions> options, CancellationToken ct) =>
+        {
+            var result = await d.Send(new VerifyMfaCommand(body.MfaToken, body.Code, body.RecoveryCode,
+                http.Request.Headers.UserAgent.ToString(), http.Connection.RemoteIpAddress?.ToString()), ct);
             return Respond(result, http, options.Value);
         }).AllowAnonymous().RequireRateLimiting("auth");
+
+        auth.MapPost("/password/complete-change", async (CompletePasswordChangeRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new CompletePasswordChangeCommand(body.PasswordChangeToken, body.NewPassword), ct)).ToHttpResult(_ => Results.NoContent()))
+            .AllowAnonymous().RequireRateLimiting("auth");
+
+        auth.MapPost("/password", async (ChangePasswordRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ChangePasswordCommand(body.CurrentPassword, body.NewPassword), ct)).ToHttpResult(_ => Results.NoContent()))
+            .RequireAuthorization();
+
+        auth.MapPost("/mfa/enroll", async (IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new BeginMfaEnrollmentCommand(), ct)).ToHttpResult())
+            .RequireAuthorization();
+        auth.MapPost("/mfa/confirm", async (MfaCodeRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ConfirmMfaCommand(body.Code), ct)).ToHttpResult())
+            .RequireAuthorization();
+        auth.MapPost("/mfa/disable", async (MfaDisableRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new DisableMfaCommand(body.Password, body.Code), ct)).ToHttpResult(_ => Results.NoContent()))
+            .RequireAuthorization();
 
         auth.MapPost("/refresh", async (HttpContext http, IDispatcher d, IOptions<AuthOptions> options, CancellationToken ct) =>
         {
@@ -134,6 +206,15 @@ public sealed class IdentityModule : IErpModule
         identity.MapPut("/users/{id:guid}/companies/{companyId:guid}", async (Guid id, Guid companyId, CompanyAccessRequest body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new SetUserCompanyAccessCommand(id, companyId, body.Granted, body.BranchIds, body.WarehouseIds), ct)).ToHttpResult())
             .RequirePermission(IdentityPermissions.UserManage);
+        identity.MapPost("/users/{id:guid}/reset-password", async (Guid id, ResetPasswordRequest? body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ResetUserPasswordCommand(id, body?.TemporaryPassword), ct)).ToHttpResult())
+            .RequirePermission(IdentityPermissions.UserManage);
+        identity.MapPost("/users/{id:guid}/deactivate", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new DeactivateUserCommand(id), ct)).ToHttpResult())
+            .RequirePermission(IdentityPermissions.UserManage);
+        identity.MapPost("/users/{id:guid}/reactivate", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ReactivateUserCommand(id), ct)).ToHttpResult())
+            .RequirePermission(IdentityPermissions.UserManage);
         identity.MapGet("/roles", async (IDispatcher d, CancellationToken ct) => (await d.Send(new ListRolesQuery(), ct)).ToHttpResult())
             .RequirePermission(IdentityPermissions.RoleRead);
         identity.MapPost("/roles", async (RoleRequest body, IDispatcher d, CancellationToken ct) =>
@@ -153,7 +234,11 @@ public sealed class IdentityModule : IErpModule
             return result.Error.ToProblem();
         }
 
-        var value = result.Value;
+        return Respond(result.Value, http, options);
+    }
+
+    private static IResult Respond(SignInResult value, HttpContext http, AuthOptions options)
+    {
         http.Response.Cookies.Append(RefreshCookie, value.RefreshToken, new CookieOptions
         {
             HttpOnly = true,

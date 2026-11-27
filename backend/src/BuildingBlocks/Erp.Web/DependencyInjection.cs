@@ -40,6 +40,7 @@ public static class DependencyInjection
     public static IApplicationBuilder UseErpRequestPipeline(this IApplicationBuilder app)
     {
         app.UseMiddleware<CorrelationIdMiddleware>();
+        app.UseIdempotentRequestBuffering();
         app.UseExceptionHandler();
         var cultures = new[] { new CultureInfo("en"), new CultureInfo("ar") };
         app.UseRequestLocalization(new RequestLocalizationOptions

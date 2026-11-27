@@ -11,7 +11,7 @@ namespace Erp.Infrastructure.Persistence;
 /// This is how a source-document posting touches several modules atomically without distributed transactions (ADR-006).
 /// The connection is opened lazily, after the tenant is known, so the session context is always correct.
 /// </summary>
-public sealed class ErpDbSession(IConnectionStringProvider connectionStrings, ITenantContext tenantContext) : IUnitOfWork, IAsyncDisposable
+public sealed class ErpDbSession(IConnectionStringProvider connectionStrings, ITenantContext tenantContext) : IUnitOfWork, IChangeTrackerReset, IAsyncDisposable
 {
     private readonly List<DbContext> _contexts = [];
     private SqlConnection? _connection;
@@ -76,9 +76,23 @@ public sealed class ErpDbSession(IConnectionStringProvider connectionStrings, IT
         {
             await Transaction.RollbackAsync(cancellationToken);
         }
+        catch (Exception ex) when (ex is InvalidOperationException or DbException)
+        {
+            // The server already rolled the transaction back (deadlock victim, broken connection). Nothing left to undo;
+            // swallowing keeps the original failure visible to the caller instead of this secondary one.
+        }
         finally
         {
             await EndTransactionAsync();
+        }
+    }
+
+    /// <summary>Detaches every tracked entity in every module context of this scope (used before retrying a command).</summary>
+    public void ClearTrackedChanges()
+    {
+        foreach (var context in _contexts)
+        {
+            context.ChangeTracker.Clear();
         }
     }
 

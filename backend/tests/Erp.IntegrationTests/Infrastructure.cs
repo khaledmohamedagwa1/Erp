@@ -32,6 +32,30 @@ public sealed class CompanyCreatedRecorder : IIntegrationEventHandler<CompanyCre
     }
 }
 
+public sealed class RecordingNotificationSender : INotificationSender
+{
+    public static readonly System.Collections.Concurrent.ConcurrentBag<EmailMessage> Sent = [];
+
+    public Task SendEmailAsync(EmailMessage message, CancellationToken cancellationToken = default)
+    {
+        Sent.Add(message);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Counts CompanyCreated deliveries through the inbox: must stay at one per company even if the event is redelivered.</summary>
+public sealed class CompanyCreatedInboxCounter(IUnitOfWork unitOfWork, IInbox inbox, IOutboxMessageContext message)
+    : InboxIntegrationEventHandler<CompanyCreated>(unitOfWork, inbox, message)
+{
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, int> Counts = new();
+
+    protected override Task HandleOnceAsync(CompanyCreated integrationEvent, CancellationToken cancellationToken)
+    {
+        Counts.AddOrUpdate(integrationEvent.CompanyId, 1, (_, n) => n + 1);
+        return Task.CompletedTask;
+    }
+}
+
 /// <summary>
 /// One API instance and one fresh database for the whole test run. Uses ERP_TEST_SQL (a SQL Server connection string
 /// without a database name) when set — e.g. in CI with a service container — otherwise starts SQL Server with Testcontainers.
@@ -68,7 +92,13 @@ public sealed class ErpApiFixture : IAsyncLifetime
             builder.UseSetting("Auth:SecureCookies", "false");
             builder.UseSetting("RateLimiting:AuthPerMinute", "10000");
             builder.UseSetting("Serilog:MinimumLevel:Default", "Warning");
-            builder.ConfigureTestServices(services => services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedRecorder>());
+            builder.UseSetting("OpenApi:Enabled", "true");
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedRecorder>();
+                services.AddScoped<IIntegrationEventHandler<CompanyCreated>, CompanyCreatedInboxCounter>();
+                services.AddSingleton<INotificationSender, RecordingNotificationSender>();
+            });
         });
 
         await _factory.Services.GetRequiredService<ErpDatabaseMigrator>().MigrateAsync();
@@ -167,9 +197,14 @@ public static class HttpExtensions
     public static Task<HttpResponseMessage> GetAsCompanyAsync(this HttpClient client, string url, Guid companyId) =>
         client.SendAsync(new HttpRequestMessage(HttpMethod.Get, url).WithCompany(companyId));
 
-    public static Task<HttpResponseMessage> SendAsCompanyAsync(this HttpClient client, HttpMethod method, string url, Guid companyId, object? body = null, string? ifMatch = null)
+    public static Task<HttpResponseMessage> SendAsCompanyAsync(this HttpClient client, HttpMethod method, string url, Guid companyId, object? body = null, string? ifMatch = null, string? idempotencyKey = null)
     {
         var request = new HttpRequestMessage(method, url).WithCompany(companyId);
+        if (idempotencyKey is not null)
+        {
+            request.Headers.Add("Idempotency-Key", idempotencyKey);
+        }
+
         if (body is not null)
         {
             request.Content = JsonContent.Create(body);

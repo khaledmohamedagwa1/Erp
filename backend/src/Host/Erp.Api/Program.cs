@@ -45,7 +45,7 @@ if (role is "worker" or "all")
     builder.Services.AddHostedService<OutboxBackgroundService>();
 }
 
-builder.Services.AddOpenApi();
+builder.Services.AddErpOpenApi();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
 builder.Services.AddRateLimiter(options =>
 {
@@ -69,7 +69,7 @@ var app = builder.Build();
 app.UseErpRequestPipeline();
 app.UseRateLimiter();
 
-if (app.Environment.IsDevelopment())
+if (app.Environment.IsDevelopment() || app.Configuration.GetValue<bool>("OpenApi:Enabled"))
 {
     app.MapOpenApi();
     app.UseSwaggerUI(o => o.SwaggerEndpoint("/openapi/v1.json", "ERP API v1"));

@@ -68,6 +68,9 @@ public sealed class AuthOptions
     public string? DefaultTenantCode { get; set; }
 
     public bool SecureCookies { get; set; } = true;
+
+    /// <summary>Issuer name shown in authenticator apps.</summary>
+    public string MfaIssuer { get; set; } = "ERP";
 }
 
 /// <summary>
@@ -106,8 +109,16 @@ public sealed record SignInResult(
     string DisplayName);
 
 // ---------- Login ----------
+/// <summary>Result of a password sign-in: a session, an MFA challenge, or a forced password change.</summary>
+public sealed record LoginOutcome(SignInResult? Session, string? MfaChallengeToken, string? PasswordChangeToken)
+{
+    public bool MfaRequired => MfaChallengeToken is not null;
+
+    public bool PasswordChangeRequired => PasswordChangeToken is not null;
+}
+
 public sealed record LoginCommand(string? TenantCode, string Email, string Password, string? UserAgent, string? IpAddress)
-    : ICommand<SignInResult>, IManualTransaction;
+    : ICommand<LoginOutcome>, IManualTransaction;
 
 public sealed class LoginValidator : AbstractValidator<LoginCommand>
 {
@@ -124,16 +135,17 @@ public sealed class LoginHandler(
     ITenantDirectory tenants,
     ITenantContext tenantContext,
     IPasswordHasher hasher,
-    ITokenService tokens,
+    ISessionIssuer sessions,
+    IChallengeTokens challenges,
     IClock clock,
-    Microsoft.Extensions.Options.IOptions<AuthOptions> options) : ICommandHandler<LoginCommand, SignInResult>
+    Microsoft.Extensions.Options.IOptions<AuthOptions> options) : ICommandHandler<LoginCommand, LoginOutcome>
 {
     // Verified when the user does not exist so response time does not reveal which emails are registered.
     private static string? _dummyHash;
 
     private string DummyHash => _dummyHash ??= hasher.Hash(Guid.NewGuid().ToString());
 
-    public async Task<Result<SignInResult>> Handle(LoginCommand command, CancellationToken cancellationToken)
+    public async Task<Result<LoginOutcome>> Handle(LoginCommand command, CancellationToken cancellationToken)
     {
         var settings = options.Value;
         var tenantCode = string.IsNullOrWhiteSpace(command.TenantCode) ? settings.DefaultTenantCode : command.TenantCode;
@@ -171,15 +183,21 @@ public sealed class LoginHandler(
             return user.IsLockedOut(now) ? IdentityErrors.LockedOut : IdentityErrors.InvalidCredentials;
         }
 
-        user.RegisterSuccessfulLogin(now);
-        var session = UserSession.Start(user.Id, now, TimeSpan.FromDays(settings.SessionAbsoluteDays), command.UserAgent, command.IpAddress);
-        var rawRefresh = RefreshTokens.Create(tenant.Id);
-        var refresh = session.IssueRefreshToken(RefreshTokens.Hash(rawRefresh), now, TimeSpan.FromDays(settings.RefreshTokenDays));
-        db.Sessions.Add(session);
-        await db.SaveChangesAsync(cancellationToken);
+        if (user.MustChangePassword)
+        {
+            user.ResetFailedAttempts();
+            await db.SaveChangesAsync(cancellationToken);
+            return new LoginOutcome(null, null, challenges.Create(ChallengePurpose.PasswordChange, tenant.Id, user.Id));
+        }
 
-        var access = tokens.CreateAccessToken(user, tenant.Id, session.Id);
-        return new SignInResult(access.Token, access.ExpiresAtUtc, rawRefresh, refresh.ExpiresAtUtc, user.Id, tenant.Id, user.DisplayName);
+        if (user.MfaEnabled)
+        {
+            // Password failures stay counted until the second factor also succeeds.
+            return new LoginOutcome(null, challenges.Create(ChallengePurpose.Mfa, tenant.Id, user.Id), null);
+        }
+
+        var session = await sessions.IssueAsync(user, tenant.Id, command.UserAgent, command.IpAddress, cancellationToken);
+        return new LoginOutcome(session, null, null);
     }
 }
 

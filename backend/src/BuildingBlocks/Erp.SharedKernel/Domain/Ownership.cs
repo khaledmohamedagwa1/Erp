@@ -14,6 +14,15 @@ public interface ICompanyScoped : ITenantScoped
     Guid CompanyId { get; }
 }
 
+/// <summary>
+/// The property holds a secret (password hash, MFA secret, recovery codes). The audit log records that it changed
+/// but never its value.
+/// </summary>
+[AttributeUsage(AttributeTargets.Property)]
+public sealed class SensitiveAttribute : Attribute
+{
+}
+
 /// <summary>Changes to entities carrying this attribute are written to the tamper-evident audit log.</summary>
 [AttributeUsage(AttributeTargets.Class, Inherited = true)]
 public sealed class AuditedAttribute : Attribute

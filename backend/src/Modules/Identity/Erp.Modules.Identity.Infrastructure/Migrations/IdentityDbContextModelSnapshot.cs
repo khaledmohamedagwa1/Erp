@@ -191,12 +191,24 @@ namespace Erp.Modules.Identity.Infrastructure.Migrations
                         .HasPrecision(3)
                         .HasColumnType("datetime2(3)");
 
+                    b.Property<bool>("MfaEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<long?>("MfaLastTimeStep")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("MfaSecretProtected")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<DateTime?>("ModifiedAtUtc")
                         .HasPrecision(3)
                         .HasColumnType("datetime2(3)");
 
                     b.Property<Guid?>("ModifiedBy")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("MustChangePassword")
+                        .HasColumnType("bit");
 
                     b.Property<string>("NormalizedEmail")
                         .IsRequired()
@@ -207,6 +219,13 @@ namespace Erp.Modules.Identity.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("PendingMfaSecretProtected")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.PrimitiveCollection<string>("RecoveryCodeHashes")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()

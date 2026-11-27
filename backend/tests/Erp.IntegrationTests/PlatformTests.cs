@@ -285,9 +285,9 @@ public class OrganizationTests(ErpApiFixture fixture)
         var legal = await (await t.Client.GetAsCompanyAsync("/api/v1/organization/legal-entities", secondId)).Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         var legalEntityId = legal.EnumerateArray().Single().GetProperty("id").GetGuid();
 
-        var branch = await t.Client.SendAsCompanyAsync(HttpMethod.Post, "/api/v1/organization/branches", secondId, new { legalEntityId, code = "JED", name = "Jeddah" });
+        var branch = await t.Client.SendAsCompanyAsync(HttpMethod.Post, "/api/v1/organization/branches", secondId, new { legalEntityId, code = "JED", name = "Jeddah" }, idempotencyKey: Guid.NewGuid().ToString());
         branch.StatusCode.ShouldBe(HttpStatusCode.Created);
-        var duplicate = await t.Client.SendAsCompanyAsync(HttpMethod.Post, "/api/v1/organization/branches", secondId, new { legalEntityId, code = "jed", name = "Again" });
+        var duplicate = await t.Client.SendAsCompanyAsync(HttpMethod.Post, "/api/v1/organization/branches", secondId, new { legalEntityId, code = "jed", name = "Again" }, idempotencyKey: Guid.NewGuid().ToString());
         (await duplicate.ErrorCodeAsync()).ShouldBe("organization.branch-code-taken");
 
         // The first company does not see the second company's branches.
@@ -295,7 +295,7 @@ public class OrganizationTests(ErpApiFixture fixture)
         firstBranches.EnumerateArray().Select(b => b.GetProperty("code").GetString()).ShouldBe(["HQ"]);
 
         // A branch from another company cannot be used for a warehouse.
-        var foreignLegal = await t.Client.SendAsCompanyAsync(HttpMethod.Post, "/api/v1/organization/branches", t.CompanyId, new { legalEntityId, code = "X1", name = "X" });
+        var foreignLegal = await t.Client.SendAsCompanyAsync(HttpMethod.Post, "/api/v1/organization/branches", t.CompanyId, new { legalEntityId, code = "X1", name = "X" }, idempotencyKey: Guid.NewGuid().ToString());
         (await foreignLegal.ErrorCodeAsync()).ShouldBe("organization.legal-entity-not-found");
     }
 

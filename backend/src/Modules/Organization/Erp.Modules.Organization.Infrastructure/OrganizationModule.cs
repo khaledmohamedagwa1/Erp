@@ -78,7 +78,8 @@ public sealed class OrganizationModule : IErpModule
             .RequirePermission(OrganizationPermissions.StructureRead);
         scoped.MapPost("/branches", async (CreateBranchCommand body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(body, ct)).ToHttpResult(b => Results.Created($"/api/v1/organization/branches/{b.Id}", b)))
-            .RequirePermission(OrganizationPermissions.StructureManage);
+            .RequirePermission(OrganizationPermissions.StructureManage)
+            .RequireIdempotency();
         scoped.MapGet("/warehouses", async (int? page, int? pageSize, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new ListWarehousesQuery(new PageRequest(page ?? 1, pageSize ?? 50)), ct)).ToHttpResult())
             .RequirePermission(OrganizationPermissions.StructureRead);

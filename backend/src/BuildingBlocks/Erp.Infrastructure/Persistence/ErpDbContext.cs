@@ -246,6 +246,12 @@ public abstract class ErpDbContext : DbContext
                     continue;
                 }
 
+                if (property.Metadata.PropertyInfo?.GetCustomAttribute<SensitiveAttribute>() is not null)
+                {
+                    before = before is null ? null : "***";
+                    after = after is null ? null : "***";
+                }
+
                 changes[property.Metadata.Name] = [before, after];
             }
 
