@@ -35,6 +35,12 @@
     <Project Path="src/Modules/Finance/Erp.Modules.Finance.Domain/Erp.Modules.Finance.Domain.csproj" />
     <Project Path="src/Modules/Finance/Erp.Modules.Finance.Infrastructure/Erp.Modules.Finance.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/FixedAssets/">
+    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Application/Erp.Modules.FixedAssets.Application.csproj" />
+    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Contracts/Erp.Modules.FixedAssets.Contracts.csproj" />
+    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Domain/Erp.Modules.FixedAssets.Domain.csproj" />
+    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Infrastructure/Erp.Modules.FixedAssets.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Modules/Identity/">
     <Project Path="src/Modules/Identity/Erp.Modules.Identity.Application/Erp.Modules.Identity.Application.csproj" />
     <Project Path="src/Modules/Identity/Erp.Modules.Identity.Contracts/Erp.Modules.Identity.Contracts.csproj" />
@@ -46,12 +52,6 @@
     <Project Path="src/Modules/Inventory/Erp.Modules.Inventory.Contracts/Erp.Modules.Inventory.Contracts.csproj" />
     <Project Path="src/Modules/Inventory/Erp.Modules.Inventory.Domain/Erp.Modules.Inventory.Domain.csproj" />
     <Project Path="src/Modules/Inventory/Erp.Modules.Inventory.Infrastructure/Erp.Modules.Inventory.Infrastructure.csproj" />
-  </Folder>
-  <Folder Name="/src/Modules/FixedAssets/">
-    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Application/Erp.Modules.FixedAssets.Application.csproj" />
-    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Contracts/Erp.Modules.FixedAssets.Contracts.csproj" />
-    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Domain/Erp.Modules.FixedAssets.Domain.csproj" />
-    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Infrastructure/Erp.Modules.FixedAssets.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/src/Modules/Manufacturing/">
     <Project Path="src/Modules/Manufacturing/Erp.Modules.Manufacturing.Application/Erp.Modules.Manufacturing.Application.csproj" />
