@@ -298,7 +298,7 @@ public sealed class SalesLine
 }
 
 /// <summary>Fields shared by every sales document. Not mapped as an entity of its own; each document has its own table.</summary>
-public abstract class SalesDocument : AggregateRoot, ICompanyScoped
+public abstract class SalesDocument : AggregateRoot, IBranchScoped, IWarehouseScoped
 {
     protected SalesDocument()
     {

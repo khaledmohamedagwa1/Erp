@@ -151,7 +151,7 @@ public static class StalePricePolicies
 
 /// <summary>A till: where it sells from (warehouse → legal entity), at which prices, and into which cash/bank accounts.</summary>
 [Audited]
-public sealed class PosTerminal : AggregateRoot, ICompanyScoped
+public sealed class PosTerminal : AggregateRoot, IBranchScoped, IWarehouseScoped
 {
     private PosTerminal()
     {
@@ -676,7 +676,7 @@ public sealed class PosPayment
 /// idempotent). Posted atomically when created: stock, the receipt journal, the number. No receivable is created.
 /// </summary>
 [Audited]
-public sealed class PosReceipt : AggregateRoot, ICompanyScoped
+public sealed class PosReceipt : AggregateRoot, IBranchScoped, IWarehouseScoped
 {
     private PosReceipt()
     {

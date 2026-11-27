@@ -22,7 +22,10 @@ tests/               Erp.UnitTests · Erp.ArchitectureTests · Erp.IntegrationTe
 | Setting | Env var | Notes |
 |---|---|---|
 | Connection string | `ConnectionStrings__Erp` | Required. |
-| Platform key | `Platform__ApiKey` | Enables `POST /api/platform/tenants`. Empty = disabled. |
+| Platform key | `Platform__ApiKey` | Bootstraps the first platform operator only (`POST /api/platform/operators/bootstrap`); operators then provision tenants with password + TOTP tokens. Empty = disabled. |
+| Shared cache | `ErpCache__Provider`, `ErpCache__RedisConnection` | `Memory` (default) or `Redis` — use Redis with more than one API instance. |
+| Step-up policy | `Auth__StepUp__MaxAgeMinutes`, `Auth__StepUp__AllowWithoutMfa` | Recent-MFA window for sensitive actions (10 min); whether users without MFA may perform them (false). |
+| OIDC client secrets | `Auth__Oidc__Secrets__<name>` | Referenced by name from a tenant's identity-provider configuration. |
 | Signing key | `Auth__SigningKeyPem` | PEM RSA private key. Required outside Development (Development uses an ephemeral key). |
 | Process role | `Erp__Role` | `api`, `worker` or `all` (default). Only worker/all deliver the outbox. |
 | Secure cookies | `Auth__SecureCookies` | `true` in production (HTTPS). |

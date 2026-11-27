@@ -20,6 +20,10 @@ data:
   {{- range $i, $origin := required "publicOrigins must list at least one https origin" .Values.publicOrigins }}
   Hosting__CorsAllowedOrigins__{{ $i }}: {{ $origin | quote }}
   {{- end }}
+  ErpCache__Provider: {{ .Values.cache.provider | quote }}
+  {{- if .Values.cache.bundledRedis.enabled }}
+  ErpCache__RedisConnection: {{ printf "%s-redis:6379,abortConnect=false" (include "erp.fullname" .) | quote }}
+  {{- end }}
   {{- range $key, $value := .Values.config.extraEnv }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}

@@ -58,6 +58,9 @@ services:
       Auth__SigningKeyPem: ${AUTH_SIGNING_KEY_PEM:-}
       Auth__SecureCookies: ${AUTH_SECURE_COOKIES:-false}
       Hosting__CorsAllowedOrigins__0: ${CORS_ORIGIN:-http://localhost:5173}
+      # Memory (default) or Redis — start the "redis" profile and set ERP_CACHE_PROVIDER=Redis to try the shared cache.
+      ErpCache__Provider: ${ERP_CACHE_PROVIDER:-Memory}
+      ErpCache__RedisConnection: redis:6379,abortConnect=false
     ports:
       - "${API_PORT:-8080}:8080"
     depends_on:
@@ -67,6 +70,12 @@ services:
       resources:
         limits:
           memory: 1g
+    restart: unless-stopped
+
+  redis:
+    profiles: ["redis"]
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
     restart: unless-stopped
 
 volumes:

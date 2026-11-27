@@ -20,6 +20,12 @@ public interface IIdentityDbContext
 
     DbSet<UserSession> Sessions { get; }
 
+    DbSet<ExternalIdentityProvider> IdentityProviders { get; }
+
+    DbSet<PlatformOperator> PlatformOperators { get; }
+
+    DbSet<PlatformAuditEntry> PlatformAudit { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
 
@@ -34,17 +40,17 @@ public sealed record AccessToken(string Token, DateTime ExpiresAtUtc);
 
 public interface ITokenService
 {
-    AccessToken CreateAccessToken(User user, Guid tenantId, Guid sessionId);
+    AccessToken CreateAccessToken(User user, Guid tenantId, UserSession session);
 }
 
 /// <summary>Invalidates cached session, access and permission data after changes.</summary>
 public interface IIdentityCache
 {
-    void InvalidateSession(Guid sessionId);
+    Task InvalidateSessionAsync(Guid sessionId);
 
-    void InvalidateUser(Guid userId);
+    Task InvalidateUserAsync(Guid userId);
 
-    void InvalidateAllPermissions();
+    Task InvalidateAllPermissionsAsync();
 }
 
 public sealed class AuthOptions
@@ -71,6 +77,12 @@ public sealed class AuthOptions
 
     /// <summary>Issuer name shown in authenticator apps.</summary>
     public string MfaIssuer { get; set; } = "ERP";
+
+    /// <summary>Audience of platform-operator tokens; tenant APIs only accept <see cref="Audience"/>.</summary>
+    public string PlatformAudience { get; set; } = "erp-platform";
+
+    /// <summary>Lifetime of platform-operator tokens (no refresh: operators sign in again with password + code).</summary>
+    public int PlatformTokenMinutes { get; set; } = 15;
 }
 
 /// <summary>
@@ -244,7 +256,7 @@ public sealed class RefreshSessionHandler(
         await db.SaveChangesAsync(cancellationToken);
         if (rotation.IsFailure)
         {
-            cache.InvalidateSession(session.Id);
+            await cache.InvalidateSessionAsync(session.Id);
             return rotation.Error;
         }
 
@@ -253,11 +265,11 @@ public sealed class RefreshSessionHandler(
         {
             session.Revoke("user-deactivated", now);
             await db.SaveChangesAsync(cancellationToken);
-            cache.InvalidateSession(session.Id);
+            await cache.InvalidateSessionAsync(session.Id);
             return IdentityErrors.SessionRevoked;
         }
 
-        var access = tokens.CreateAccessToken(user, tenantId, session.Id);
+        var access = tokens.CreateAccessToken(user, tenantId, session);
         var newest = session.Tokens.Single(t => t.UsedAtUtc is null);
         return new SignInResult(access.Token, access.ExpiresAtUtc, rawRefresh, newest.ExpiresAtUtc, user.Id, tenantId, user.DisplayName);
     }
@@ -280,7 +292,7 @@ public sealed class LogoutHandler(IIdentityDbContext db, ICurrentUser currentUse
         {
             session.Revoke("logout", clock.UtcNow);
             await db.SaveChangesAsync(cancellationToken);
-            cache.InvalidateSession(sessionId);
+            await cache.InvalidateSessionAsync(sessionId);
         }
 
         return Unit.Value;
@@ -402,7 +414,7 @@ public sealed class SetUserRolesHandler(IIdentityDbContext db, IIdentityCache ca
 
         user.SetRoles(roleIds);
         await db.SaveChangesAsync(cancellationToken);
-        cache.InvalidateUser(user.Id);
+        await cache.InvalidateUserAsync(user.Id);
         return IdentityMapping.ToDto(user);
     }
 }
@@ -436,7 +448,7 @@ public sealed class SetUserCompanyAccessHandler(IIdentityDbContext db, IIdentity
         }
 
         await db.SaveChangesAsync(cancellationToken);
-        cache.InvalidateUser(user.Id);
+        await cache.InvalidateUserAsync(user.Id);
         return IdentityMapping.ToDto(user);
     }
 }
@@ -521,7 +533,7 @@ public sealed class SetRolePermissionsHandler(IIdentityDbContext db, IPermission
 
         role.SetPermissions(permissions);
         await db.SaveChangesAsync(cancellationToken);
-        cache.InvalidateAllPermissions();
+        await cache.InvalidateAllPermissionsAsync();
         return IdentityMapping.ToDto(role);
     }
 }
@@ -589,7 +601,7 @@ public sealed class IdentityProvisioning(IIdentityDbContext db, IPasswordHasher 
         var user = await db.Users.Include(u => u.CompanyAccess).FirstAsync(u => u.Id == userId, cancellationToken);
         user.GrantCompanyAccess(companyId);
         await db.SaveChangesAsync(cancellationToken);
-        cache.InvalidateUser(userId);
+        await cache.InvalidateUserAsync(userId);
     }
 }
 

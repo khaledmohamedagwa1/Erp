@@ -8,6 +8,7 @@ using Erp.Modules.Organization.Application;
 using Erp.Modules.Organization.Contracts;
 using Erp.Web.Http;
 using Erp.Web.Modules;
+using Erp.Web.Security;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -57,7 +58,7 @@ public sealed class OrganizationModule : IErpModule
                 (await d.Send(body, ct)).ToHttpResult(r => Results.Created($"/api/platform/tenants/{r.TenantId}", r)))
             .WithTags("Platform")
             .AllowAnonymous()
-            .RequirePlatformKey();
+            .RequirePlatformOperator("tenant.provisioned");
 
         var group = endpoints.MapGroup("/api/v1/organization").WithTags("Organization").RequireAuthorization();
 

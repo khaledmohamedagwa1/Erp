@@ -143,7 +143,7 @@ public static class AssetEventKinds
 }
 
 [Audited]
-public sealed class Asset : AggregateRoot, ICompanyScoped
+public sealed class Asset : AggregateRoot, IBranchScoped
 {
     private Asset()
     {

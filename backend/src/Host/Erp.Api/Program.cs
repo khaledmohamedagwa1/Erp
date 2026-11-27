@@ -1,4 +1,3 @@
-using System.Threading.RateLimiting;
 using Erp.Infrastructure.Database;
 using Erp.Infrastructure.Outbox;
 using Erp.Infrastructure.Tenancy;
@@ -72,13 +71,6 @@ builder.Services.AddErpHosting(builder.Configuration, role);
 
 builder.Services.AddErpOpenApi();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
-builder.Services.AddRateLimiter(options =>
-{
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddPolicy("auth", http => RateLimitPartition.GetFixedWindowLimiter(
-        http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = builder.Configuration.GetValue("RateLimiting:AuthPerMinute", 20), Window = TimeSpan.FromMinutes(1) }));
-});
 
 var otlp = builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"];
 if (!string.IsNullOrWhiteSpace(otlp))

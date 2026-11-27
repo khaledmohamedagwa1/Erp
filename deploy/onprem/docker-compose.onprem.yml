@@ -37,6 +37,9 @@ x-erp-env: &erp-env
   Hosting__KnownNetworks__0: ${ERP_SUBNET:-172.28.0.0/24}
   Hosting__CorsAllowedOrigins__0: ${ERP_PUBLIC_ORIGIN:?set ERP_PUBLIC_ORIGIN in .env}
   Serilog__MinimumLevel__Default: ${ERP_LOG_LEVEL:-Information}
+  # Memory (default) or Redis. Use Redis (profile "redis") when running more than one api container.
+  ErpCache__Provider: ${ERP_CACHE_PROVIDER:-Memory}
+  ErpCache__RedisConnection: ${ERP_REDIS_CONNECTION:-redis:6379,abortConnect=false}
   # ConnectionStrings__Erp, Auth__SigningKeyPem and Platform__ApiKey come from files in ./secrets (key-per-file).
 
 services:
@@ -132,6 +135,28 @@ services:
     deploy:
       resources:
         limits: { memory: "${ERP_SQL_MEMORY:-4g}" }
+    restart: unless-stopped
+    networks: [erp]
+    logging: *erp-logging
+
+  # Optional shared cache (profile redis; set ERP_CACHE_PROVIDER=Redis). Cache only: no persistence, not published.
+  redis:
+    profiles: ["redis"]
+    image: ${ERP_REDIS_IMAGE:-redis:7.4-alpine}
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    read_only: true
+    user: "999:999"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    tmpfs: ["/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { memory: 320m }
     restart: unless-stopped
     networks: [erp]
     logging: *erp-logging

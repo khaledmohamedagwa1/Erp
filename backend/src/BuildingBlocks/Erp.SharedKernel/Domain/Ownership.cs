@@ -28,3 +28,19 @@ public sealed class SensitiveAttribute : Attribute
 public sealed class AuditedAttribute : Attribute
 {
 }
+
+/// <summary>
+/// A company document that belongs to one branch (property <c>BranchId</c>, <see cref="Guid"/> or nullable). Users whose
+/// access is limited to some branches only see and create such documents for those branches. A null branch is company-wide.
+/// </summary>
+public interface IBranchScoped : ICompanyScoped
+{
+}
+
+/// <summary>
+/// A company document that belongs to one warehouse (property <c>WarehouseId</c>, <see cref="Guid"/> or nullable). Users whose
+/// access is limited to some warehouses only see and create such documents for those warehouses.
+/// </summary>
+public interface IWarehouseScoped : ICompanyScoped
+{
+}
