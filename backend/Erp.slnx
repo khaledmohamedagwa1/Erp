@@ -65,6 +65,12 @@
     <Project Path="src/Modules/Tax/Erp.Modules.Tax.Domain/Erp.Modules.Tax.Domain.csproj" />
     <Project Path="src/Modules/Tax/Erp.Modules.Tax.Infrastructure/Erp.Modules.Tax.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/Procurement/">
+    <Project Path="src/Modules/Procurement/Erp.Modules.Procurement.Application/Erp.Modules.Procurement.Application.csproj" />
+    <Project Path="src/Modules/Procurement/Erp.Modules.Procurement.Contracts/Erp.Modules.Procurement.Contracts.csproj" />
+    <Project Path="src/Modules/Procurement/Erp.Modules.Procurement.Domain/Erp.Modules.Procurement.Domain.csproj" />
+    <Project Path="src/Modules/Procurement/Erp.Modules.Procurement.Infrastructure/Erp.Modules.Procurement.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Modules/Workflow/">
     <Project Path="src/Modules/Workflow/Erp.Modules.Workflow.Contracts/Erp.Modules.Workflow.Contracts.csproj" />
   </Folder>
