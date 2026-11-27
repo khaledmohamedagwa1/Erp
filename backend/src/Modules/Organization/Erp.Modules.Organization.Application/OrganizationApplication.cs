@@ -358,6 +358,25 @@ public sealed class OrganizationQueries(IOrganizationDbContext db, ITenantContex
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<WarehouseSummary>> GetWarehousesAsync(IReadOnlyCollection<Guid> warehouseIds, CancellationToken cancellationToken = default)
+    {
+        var tenantId = tenant.TenantId ?? throw new InvalidOperationException("Tenant context required.");
+        return await db.Warehouses.IgnoreQueryFilters().AsNoTracking()
+            .Where(w => EF.Property<Guid>(w, "TenantId") == tenantId && warehouseIds.Contains(w.Id))
+            .Select(w => new WarehouseSummary(w.Id, w.CompanyId, w.LegalEntityId, w.BranchId, w.Code, w.Name, w.Type.ToString(), w.IsActive))
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<WarehouseSummary?> GetTransitWarehouseAsync(Guid legalEntityId, CancellationToken cancellationToken = default)
+    {
+        var tenantId = tenant.TenantId ?? throw new InvalidOperationException("Tenant context required.");
+        return await db.Warehouses.IgnoreQueryFilters().AsNoTracking()
+            .Where(w => EF.Property<Guid>(w, "TenantId") == tenantId && w.LegalEntityId == legalEntityId && w.Type == WarehouseType.Transit)
+            .OrderBy(w => w.Code)
+            .Select(w => new WarehouseSummary(w.Id, w.CompanyId, w.LegalEntityId, w.BranchId, w.Code, w.Name, w.Type.ToString(), w.IsActive))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<CompanySummary>> GetCompaniesAsync(IReadOnlyCollection<Guid> companyIds, CancellationToken cancellationToken = default) =>
         await db.Companies.AsNoTracking().Where(c => companyIds.Contains(c.Id)).OrderBy(c => c.Code)
             .Select(c => new CompanySummary(c.Id, c.Code, c.NameEn, c.NameAr, c.BaseCurrency))
