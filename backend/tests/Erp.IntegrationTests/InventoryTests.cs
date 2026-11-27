@@ -90,6 +90,13 @@ public class InventoryTests(ErpApiFixture fixture)
         return await Json(await Send(s, HttpMethod.Post, $"/api/v1/inventory/opening-stock/{id}/post", idempotent: true));
     }
 
+    /// <summary>Incoming quantity on the stock inquiry (open purchase orders + inbound transfers in transit).</summary>
+    private async Task<decimal> IncomingAsync(Store s, Guid product, Guid warehouse)
+    {
+        var page = await Json(await s.T.Client.GetAsCompanyAsync($"/api/v1/inventory/stock?productId={product}&warehouseId={warehouse}", s.T.CompanyId));
+        return page.GetProperty("items").EnumerateArray().Sum(r => r.GetProperty("incoming").GetDecimal());
+    }
+
     private async Task<decimal> OnHandAsync(Store s, Guid product, Guid warehouse)
     {
         var page = await Json(await s.T.Client.GetAsCompanyAsync($"/api/v1/inventory/stock?productId={product}&warehouseId={warehouse}", s.T.CompanyId));
@@ -220,11 +227,13 @@ public class InventoryTests(ErpApiFixture fixture)
         issued.GetProperty("status").GetString().ShouldBe("InTransit");
         (await OnHandAsync(s, s.Plain, s.Main)).ShouldBe(70m);
         (await RoleBalanceAsync(s, PostingRoles.InventoryInTransit)).ShouldBe(150m);
+        (await IncomingAsync(s, s.Plain, s.Second)).ShouldBe(30m); // in transit to the destination
 
         var received = await Json(await Send(s, HttpMethod.Post, $"/api/v1/inventory/transfers/{id}/receive",
             new { date = "2026-03-03", lines = new[] { new { lineId, quantity = 2 } } }, idempotent: true));
         received.GetProperty("status").GetString().ShouldBe("PartiallyReceived");
         (await OnHandAsync(s, s.Plain, s.Second)).ShouldBe(20m);
+        (await IncomingAsync(s, s.Plain, s.Second)).ShouldBe(10m);
 
         var tooMuch = await Send(s, HttpMethod.Post, $"/api/v1/inventory/transfers/{id}/receive",
             new { date = "2026-03-03", lines = new[] { new { lineId, quantity = 2 } } }, idempotent: true);

@@ -62,6 +62,7 @@ public sealed class InventoryModule : IErpModule
         services.AddScoped<IInventoryPostingService>(sp => sp.GetRequiredService<InventoryPostingService>());
         services.AddScoped<IReservationService, ReservationService>();
         services.AddScoped<IStockQueries, StockQueries>();
+        services.AddScoped<IInventoryReportQueries, InventoryReportQueries>();
         services.AddScoped<InventoryDocumentSupport>();
         services.AddScoped<AdjustmentPoster>();
         services.AddScoped<TransferLegPoster>();

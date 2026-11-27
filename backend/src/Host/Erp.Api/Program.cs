@@ -16,6 +16,7 @@ using Erp.Modules.Tax.Infrastructure;
 using Erp.Modules.Identity.Infrastructure;
 using Erp.Modules.Organization.Infrastructure;
 using Erp.Modules.Parties.Infrastructure;
+using Erp.Modules.Reporting.Infrastructure;
 using Erp.Modules.Workflow.Infrastructure;
 using Erp.Web;
 using Erp.Web.Modules;
@@ -43,7 +44,7 @@ builder.Services.AddSerilog((services, logger) =>
 });
 
 // ---- Modules: the platform is composed from these (order = migration order is set per module) ----
-IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule(), new PartiesModule(), new TaxModule(), new CatalogModule(), new AccountingModule(), new FinanceModule(), new InventoryModule(), new WorkflowModule(), new ManufacturingModule(), new ProcurementModule(), new SalesModule(), new FixedAssetsModule(), new PosModule()];
+IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule(), new PartiesModule(), new TaxModule(), new CatalogModule(), new AccountingModule(), new FinanceModule(), new InventoryModule(), new WorkflowModule(), new ManufacturingModule(), new ProcurementModule(), new SalesModule(), new FixedAssetsModule(), new PosModule(), new ReportingModule()];
 builder.Services.AddErpPlatform(builder.Configuration, modules);
 
 // ---- Process role: api | worker | all (same image, different responsibilities) ----

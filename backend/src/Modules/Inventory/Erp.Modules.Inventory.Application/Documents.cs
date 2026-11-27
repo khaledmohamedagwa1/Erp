@@ -6,6 +6,8 @@ using Erp.Modules.Catalog.Contracts;
 using Erp.Modules.Inventory.Contracts;
 using Erp.Modules.Inventory.Domain;
 using Erp.Modules.Organization.Contracts;
+using Erp.Modules.Procurement.Contracts;
+using Erp.Modules.Sales.Contracts;
 using Erp.SharedKernel.Domain;
 using Erp.SharedKernel.Results;
 using FluentValidation;
@@ -52,7 +54,8 @@ public sealed record CountLineDto(Guid LineId, Guid ProductId, Guid? VariantId, 
 
 public sealed record CountDto(Guid Id, string Number, Guid LegalEntityId, Guid WarehouseId, DateOnly Date, string Status, DateTime? SnapshotAtUtc, Guid? AdjustmentId, IReadOnlyList<CountLineDto> Lines);
 
-public sealed record StockRowDto(Guid ProductId, Guid? VariantId, Guid WarehouseId, decimal OnHand, decimal Reserved, decimal Available, decimal Incoming);
+/// <summary>Stock figures in base units; see <see cref="StockInquiryHandler"/> for how incoming/outgoing/projected are derived.</summary>
+public sealed record StockRowDto(Guid ProductId, Guid? VariantId, Guid WarehouseId, decimal OnHand, decimal Reserved, decimal Available, decimal Incoming, decimal Outgoing, decimal Projected);
 
 public sealed record MovementDto(
     Guid Id, DateOnly TransactionDate, string MovementType, Guid ProductId, Guid? VariantId, Guid WarehouseId, Guid? BatchId, Guid? SerialId,
@@ -913,7 +916,15 @@ public sealed class GetCountHandler(IInventoryDbContext db) : IQueryHandler<GetC
 // ---------------- Inquiries ----------------
 public sealed record StockInquiryQuery(Guid? ProductId, Guid? WarehouseId, PageRequest Page) : IQuery<PagedResult<StockRowDto>>;
 
-public sealed class StockInquiryHandler(IInventoryDbContext db) : IQueryHandler<StockInquiryQuery, PagedResult<StockRowDto>>
+/// <summary>
+/// Stock per product/variant/warehouse. Available = OnHand − Reserved; Incoming = open purchase-order supply (when Procurement is
+/// installed) + quantities in transit on inbound transfers; Outgoing = open sales-order demand (when Sales is installed);
+/// Projected = Available + Incoming − Outgoing. Rows with only incoming/outgoing quantities are listed too.
+/// </summary>
+public sealed class StockInquiryHandler(
+    IInventoryDbContext db,
+    IEnumerable<IProcurementQueries> procurement,
+    IEnumerable<ISalesQueries> sales) : IQueryHandler<StockInquiryQuery, PagedResult<StockRowDto>>
 {
     public async Task<Result<PagedResult<StockRowDto>>> Handle(StockInquiryQuery query, CancellationToken cancellationToken)
     {
@@ -928,16 +939,92 @@ public sealed class StockInquiryHandler(IInventoryDbContext db) : IQueryHandler<
             source = source.Where(b => b.WarehouseId == w);
         }
 
-        var grouped = source.GroupBy(b => new { b.ProductId, b.VariantKey, b.WarehouseId })
+        var balances = await source.GroupBy(b => new { b.ProductId, b.VariantKey, b.WarehouseId })
             .Select(g => new { g.Key.ProductId, g.Key.VariantKey, g.Key.WarehouseId, OnHand = g.Sum(b => b.OnHand), Reserved = g.Sum(b => b.Reserved) })
-            .Where(r => r.OnHand != 0 || r.Reserved != 0);
-        var total = await grouped.CountAsync(cancellationToken);
-        var rows = await grouped.OrderBy(r => r.ProductId).ThenBy(r => r.WarehouseId).Skip(query.Page.Skip).Take(query.Page.SafePageSize).ToListAsync(cancellationToken);
+            .Where(r => r.OnHand != 0 || r.Reserved != 0)
+            .ToListAsync(cancellationToken);
 
-        // Incoming (open purchase orders, inbound transfers) is supplied by purchasing in a later phase; 0 until then.
-        return new PagedResult<StockRowDto>(
-            rows.Select(r => new StockRowDto(r.ProductId, Keys.Nullable(r.VariantKey), r.WarehouseId, r.OnHand, r.Reserved, r.OnHand - r.Reserved, 0)).ToList(),
-            query.Page.SafePage, query.Page.SafePageSize, total);
+        var rows = new Dictionary<(Guid Product, Guid Variant, Guid Warehouse), StockFigures>();
+        StockFigures Row(Guid product, Guid? variant, Guid warehouse)
+        {
+            var key = (product, variant ?? Guid.Empty, warehouse);
+            if (!rows.TryGetValue(key, out var row))
+            {
+                row = new StockFigures();
+                rows[key] = row;
+            }
+
+            return row;
+        }
+
+        foreach (var b in balances)
+        {
+            var row = Row(b.ProductId, Keys.Nullable(b.VariantKey), b.WarehouseId);
+            row.OnHand += b.OnHand;
+            row.Reserved += b.Reserved;
+        }
+
+        bool Wanted(Guid product, Guid warehouse) =>
+            (query.ProductId is not { } pid || pid == product) && (query.WarehouseId is not { } wid || wid == warehouse);
+
+        // Inbound transfers: shipped to transit but not yet received (or written off as lost) at the destination.
+        var transfers = await db.Transfers.AsNoTracking()
+            .Where(t => t.Status == TransferStatus.InTransit || t.Status == TransferStatus.PartiallyReceived)
+            .ToListAsync(cancellationToken);
+        foreach (var t in transfers)
+        {
+            foreach (var l in t.Lines.Where(l => Wanted(l.ProductId, t.ToWarehouseId)))
+            {
+                var open = (l.PostedBaseQuantity ?? 0) - l.ReceivedBaseQuantity - l.LostBaseQuantity;
+                if (open > 0)
+                {
+                    Row(l.ProductId, l.VariantId, t.ToWarehouseId).Incoming += open;
+                }
+            }
+        }
+
+        foreach (var supplier in procurement)
+        {
+            var supply = query.ProductId is { } productId
+                ? await supplier.GetOpenSupplyAsync([productId], query.WarehouseId, cancellationToken)
+                : await supplier.GetAllOpenSupplyAsync(query.WarehouseId, cancellationToken);
+            foreach (var s in supply.Where(s => Wanted(s.ProductId, s.WarehouseId)))
+            {
+                Row(s.ProductId, s.VariantId, s.WarehouseId).Incoming += s.OpenBaseQuantity;
+            }
+        }
+
+        foreach (var demandSource in sales)
+        {
+            var demand = query.ProductId is { } productId
+                ? await demandSource.GetOpenDemandAsync([productId], query.WarehouseId, cancellationToken)
+                : await demandSource.GetAllOpenDemandAsync(query.WarehouseId, cancellationToken);
+            foreach (var d in demand.Where(d => Wanted(d.ProductId, d.WarehouseId)))
+            {
+                Row(d.ProductId, d.VariantId, d.WarehouseId).Outgoing += d.OpenBaseQuantity;
+            }
+        }
+
+        var ordered = rows.OrderBy(r => r.Key.Product).ThenBy(r => r.Key.Warehouse).ThenBy(r => r.Key.Variant).ToList();
+        var page = ordered.Skip(query.Page.Skip).Take(query.Page.SafePageSize).Select(r =>
+        {
+            var f = r.Value;
+            var available = f.OnHand - f.Reserved;
+            return new StockRowDto(r.Key.Product, Keys.Nullable(r.Key.Variant), r.Key.Warehouse, f.OnHand, f.Reserved, available, f.Incoming, f.Outgoing,
+                available + f.Incoming - f.Outgoing);
+        }).ToList();
+        return new PagedResult<StockRowDto>(page, query.Page.SafePage, query.Page.SafePageSize, ordered.Count);
+    }
+
+    private sealed class StockFigures
+    {
+        public decimal OnHand { get; set; }
+
+        public decimal Reserved { get; set; }
+
+        public decimal Incoming { get; set; }
+
+        public decimal Outgoing { get; set; }
     }
 }
 

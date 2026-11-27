@@ -103,5 +103,5 @@ Every endpoint needs authentication, an active company and the module. An endpoi
 - Document lines are stored as JSON columns. Document numbers are assigned when the document is created.
 - Reservations are held on the aggregate (non-batch) balance row.
 - Reversing a FIFO cost adjustment changes the layer's cost only approximately when the layer has been partly consumed since.
-- `Incoming` stock is reported as 0 until procurement exists.
+- Stock inquiry (`GET /api/v1/inventory/stock`) reports `Available = OnHand − Reserved`, `Incoming` (open purchase-order quantity from Procurement.Contracts + quantity in transit on inbound transfers), `Outgoing` (open sales-order demand from Sales.Contracts) and `Projected = Available + Incoming − Outgoing`. Procurement and Sales are optional: without them their part is 0. Rows that only have incoming/outgoing quantities are listed too.
 - Partial transfer receipts can leave rounding residues of a fraction of a cent in 1320.

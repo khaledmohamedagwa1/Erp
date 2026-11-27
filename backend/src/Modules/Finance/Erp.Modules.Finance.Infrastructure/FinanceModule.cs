@@ -70,6 +70,7 @@ public sealed class FinanceModule : IErpModule
         services.AddScoped<ICreditExposureQueries, CreditExposureQueries>();
         services.AddScoped<IOpenItemQueries, OpenItemQueries>();
         services.AddScoped<ICashBankAccountQueries, CashBankAccountQueries>();
+        services.AddScoped<IFinanceDocumentQueries, FinanceDocumentQueries>();
         services.AddHandlersFromAssembly(typeof(IFinanceDbContext).Assembly);
         services.AddSingleton(new EventAssembly(typeof(OpenItem).Assembly));
         services.AddSingleton(new EventAssembly(typeof(InvoiceSettled).Assembly));

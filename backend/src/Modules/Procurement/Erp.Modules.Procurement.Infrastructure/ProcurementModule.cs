@@ -76,6 +76,7 @@ public sealed class ProcurementModule : IErpModule
         services.AddScoped<InvoiceLineBuilder>();
         services.AddScoped<InvoiceMatcher>();
         services.AddScoped<IProcurementQueries, ProcurementQueries>();
+        services.AddScoped<IProcurementReportQueries, ProcurementReportQueries>();
 
         // Default until the Workflow module is installed: nothing requires approval.
         services.TryAddScoped<IApprovalService, NoApprovalRequired>();
