@@ -46,3 +46,19 @@ public static class ProcurementPermissions
     public const string LandedCostManage = "procurement.landed-cost.manage";
     public const string LandedCostPost = "procurement.landed-cost.post";
 }
+
+/// <summary>
+/// A purchase invoice line as other modules see it. <see cref="BaseNet"/> is the posted cost in the functional currency
+/// (net plus non-recoverable tax); zero before posting.
+/// </summary>
+public sealed record PurchaseInvoiceLineSummary(Guid LineId, string Kind, Guid? AccountId, Guid? ProductId, string? Description, decimal Quantity, decimal BaseNet);
+
+public sealed record PurchaseInvoiceSummary(Guid Id, Guid LegalEntityId, Guid SupplierId, string? Number, string SupplierInvoiceNumber, DateOnly InvoiceDate, bool IsPosted,
+    IReadOnlyList<PurchaseInvoiceLineSummary> Lines);
+
+/// <summary>Purchase invoices for other modules (Fixed Assets validates the invoice an asset is capitalised from).</summary>
+public interface IPurchaseInvoiceQueries
+{
+    /// <summary>An invoice of the active company, or null.</summary>
+    Task<PurchaseInvoiceSummary?> GetPurchaseInvoiceAsync(Guid invoiceId, CancellationToken cancellationToken = default);
+}

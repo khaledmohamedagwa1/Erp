@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using ClosedXML.Excel;
 using Erp.Application.Abstractions;
+using Erp.Infrastructure.Outbox;
 using Erp.Modules.Accounting.Contracts;
 using Erp.Modules.Finance.Contracts;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -404,7 +405,7 @@ public class ReportingTests(ErpApiFixture fixture)
         await ErpApiFixture.SignInAsync(analyst, t.TenantCode, "analyst@reports.example", "Analyst-Passw0rd!");
         var visible = await Ok(await analyst.GetAsCompanyAsync(Api, t.CompanyId));
         visible.EnumerateArray().ShouldAllBe(r => r.GetProperty("area").GetString() == "sales");
-        visible.GetArrayLength().ShouldBe(6);
+        visible.GetArrayLength().ShouldBe(7);
         (await analyst.GetAsCompanyAsync($"{Api}/sales/summary", t.CompanyId)).StatusCode.ShouldBe(HttpStatusCode.OK);
         (await analyst.GetAsCompanyAsync($"{Api}/purchasing/by-supplier", t.CompanyId)).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
         (await analyst.GetAsCompanyAsync($"{Api}/documents/sales-invoice/{Guid.NewGuid()}", t.CompanyId)).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
@@ -434,5 +435,198 @@ public class ReportingTests(ErpApiFixture fixture)
 
         (await Send(t, HttpMethod.Delete, $"{Api}/views/{created.GetProperty("id").GetGuid()}")).StatusCode.ShouldBe(HttpStatusCode.NoContent);
         (await Get(t, $"{Api}/views")).GetArrayLength().ShouldBe(0);
+    }
+
+    private async Task<(Guid RoleId, HttpClient Client)> NewUserAsync(ErpApiFixture.TenantSession t, string name, params string[] permissions)
+    {
+        var role = await Ok(await t.Client.PostAsJsonAsync("/api/v1/identity/roles", new { name, permissions }, Ct));
+        var email = $"{name.ToLowerInvariant().Replace(' ', '-')}@reports.example";
+        await Ok(await t.Client.PostAsJsonAsync("/api/v1/identity/users", new
+        {
+            email, displayName = name, password = "Report-Passw0rd!", roleIds = new[] { role.GetProperty("id").GetGuid() }, companyIds = new[] { t.CompanyId },
+        }, Ct));
+        var client = fixture.CreateClient();
+        await ErpApiFixture.SignInAsync(client, t.TenantCode, email, "Report-Passw0rd!");
+        return (role.GetProperty("id").GetGuid(), client);
+    }
+
+    [Fact]
+    public async Task Dashboards_are_shared_read_only_and_widgets_run_with_the_viewers_permissions()
+    {
+        var t = await fixture.NewTenantAsync(preset: "services");
+        var (salesRole, salesViewer) = await NewUserAsync(t, "Dash sales", "reporting.dashboard.read", "reporting.sales.read");
+        var (otherRole, otherViewer) = await NewUserAsync(t, "Dash other", "reporting.dashboard.read");
+        using var s = salesViewer;
+        using var o = otherViewer;
+
+        (await (await Send(t, HttpMethod.Post, $"{Api}/dashboards", new
+        {
+            name = "Bad", widgets = new[] { new { title = "X", reportKey = "sales/unknown", visualization = "Table", x = 0, y = 0, width = 4, height = 3 } },
+        })).ErrorCodeAsync()).ShouldBe("reporting.report-not-found");
+        (await (await Send(t, HttpMethod.Post, $"{Api}/dashboards", new
+        {
+            name = "Bad", widgets = new[]
+            {
+                new { title = "X", reportKey = "sales/summary", visualization = "Table", parameters = new Dictionary<string, string> { ["from"] = "last week" }, x = 0, y = 0, width = 4, height = 3 },
+            },
+        })).ErrorCodeAsync()).ShouldBe("reporting.parameter-invalid");
+
+        var created = await Post(t, $"{Api}/dashboards", new
+        {
+            name = "Sales overview", sharedWithRoleIds = new[] { salesRole, otherRole },
+            widgets = new object[]
+            {
+                new
+                {
+                    title = "Revenue this month", reportKey = "sales/summary", visualization = "Kpi", valueColumn = "netRevenue",
+                    parameters = new Dictionary<string, string> { ["from"] = "month-start", ["to"] = "today", ["groupBy"] = "day" }, x = 0, y = 0, width = 3, height = 2,
+                },
+                new
+                {
+                    title = "Top products", reportKey = "sales/by-product", visualization = "Bar", labelColumn = "product", valueColumn = "netRevenue", rowLimit = 5,
+                    parameters = new Dictionary<string, string> { ["from"] = "-3m" }, x = 3, y = 0, width = 9, height = 4,
+                },
+            },
+        });
+        var id = created.GetProperty("id").GetGuid();
+        var kpi = created.GetProperty("widgets")[0].GetProperty("widgetId").GetGuid();
+        created.GetProperty("isOwner").GetBoolean().ShouldBeTrue();
+
+        // A viewer with sales rights sees the shared dashboard and its data, but cannot change it.
+        (await Ok(await s.GetAsCompanyAsync($"{Api}/dashboards", t.CompanyId))).EnumerateArray().Single().GetProperty("isOwner").GetBoolean().ShouldBeFalse();
+        var data = await Ok(await s.GetAsCompanyAsync($"{Api}/dashboards/{id}/widgets/{kpi}/data", t.CompanyId));
+        data.GetProperty("visualization").GetString().ShouldBe("Kpi");
+        data.GetProperty("result").GetProperty("key").GetString().ShouldBe("summary");
+        data.GetProperty("value").GetDecimal().ShouldBe(0m);
+        (await s.SendAsCompanyAsync(HttpMethod.Delete, $"{Api}/dashboards/{id}", t.CompanyId)).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+
+        // Sharing never widens access: the other viewer sees the dashboard but not the sales data behind it.
+        (await Ok(await o.GetAsCompanyAsync($"{Api}/dashboards/{id}", t.CompanyId))).GetProperty("name").GetString().ShouldBe("Sales overview");
+        (await o.GetAsCompanyAsync($"{Api}/dashboards/{id}/widgets/{kpi}/data", t.CompanyId)).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+
+        // Unshared: gone for the viewers.
+        var updated = await Ok(await Send(t, HttpMethod.Put, $"{Api}/dashboards/{id}", new { name = "Mine only", widgets = Array.Empty<object>() }));
+        updated.GetProperty("widgets").GetArrayLength().ShouldBe(0);
+        (await s.GetAsCompanyAsync($"{Api}/dashboards/{id}", t.CompanyId)).StatusCode.ShouldBe(HttpStatusCode.NotFound);
+        (await Send(t, HttpMethod.Delete, $"{Api}/dashboards/{id}")).StatusCode.ShouldBe(HttpStatusCode.NoContent);
+    }
+
+    [Fact]
+    public async Task Scheduled_reports_run_as_the_owner_keep_the_file_and_email_the_recipients()
+    {
+        var t = await fixture.NewTenantAsync(preset: "services");
+        (await (await Send(t, HttpMethod.Post, $"{Api}/schedules", new
+        {
+            name = "Bad", reportKey = "sales/summary", format = "csv", cron = "every day", isActive = true,
+        })).ErrorCodeAsync()).ShouldBe("validation-failed");
+
+        var schedule = await Post(t, $"{Api}/schedules", new
+        {
+            name = "Daily sales", reportKey = "sales/summary", format = "csv", cron = "0 6 * * *", isActive = true,
+            parameters = new Dictionary<string, string> { ["from"] = "-7d", ["groupBy"] = "day" }, recipients = new[] { "boss@reports.example" },
+        });
+        var id = schedule.GetProperty("id").GetGuid();
+        var next = schedule.GetProperty("nextRunAtUtc").GetDateTime();
+        next.Hour.ShouldBe(6);
+        next.Minute.ShouldBe(0);
+
+        // Run now (manual trigger): stored with its file and the recipients get a link.
+        var run = await Post(t, $"{Api}/schedules/{id}/run");
+        run.GetProperty("status").GetString().ShouldBe("Succeeded");
+        var download = await t.Client.GetAsCompanyAsync(run.GetProperty("downloadUrl").GetString()!, t.CompanyId);
+        download.StatusCode.ShouldBe(HttpStatusCode.OK);
+        download.Content.Headers.ContentType!.MediaType.ShouldBe("text/csv");
+        RecordingNotificationSender.Sent.ShouldContain(m => m.To == "boss@reports.example" && m.Body.Contains(run.GetProperty("id").GetGuid().ToString()));
+
+        // The worker path: a due occurrence is claimed once (the next run moves on) and runs without a signed-in user.
+        await using (var scope = fixture.Factory.Services.CreateAsyncScope())
+        {
+            var tenant = scope.ServiceProvider.GetRequiredService<ITenantContext>();
+            tenant.SetTenant(t.TenantId);
+            var clock = scope.ServiceProvider.GetRequiredService<IClock>();
+            var db = scope.ServiceProvider.GetRequiredService<Erp.Modules.Reporting.Application.IReportingDbContext>();
+            (await Erp.Modules.Reporting.Application.ReportScheduleExecutor.DueAsync(db, t.TenantId, next.AddMinutes(1), Ct)).ShouldContain(d => d.ScheduleId == id);
+        }
+
+        await AsScheduleWorkerAsync(t, id, next.AddMinutes(1), "Succeeded");
+        var runs = await Get(t, $"{Api}/schedules/{id}/runs");
+        runs.GetArrayLength().ShouldBe(2);
+        runs.EnumerateArray().Select(r => r.GetProperty("trigger").GetString()).ShouldBe(["Schedule", "Manual"], ignoreOrder: true);
+        (await Get(t, $"{Api}/schedules")).EnumerateArray().Single().GetProperty("nextRunAtUtc").GetDateTime().ShouldBe(next.AddDays(1));
+
+        // Other users never see someone else's schedules.
+        var (_, otherClient) = await NewUserAsync(t, "Sched other", "reporting.schedule.manage", "reporting.sales.read");
+        using var other = otherClient;
+        (await Ok(await other.GetAsCompanyAsync($"{Api}/schedules", t.CompanyId))).GetArrayLength().ShouldBe(0);
+        (await other.SendAsCompanyAsync(HttpMethod.Post, $"{Api}/schedules/{id}/run", t.CompanyId, new { })).StatusCode.ShouldBe(HttpStatusCode.NotFound);
+        (await Send(t, HttpMethod.Delete, $"{Api}/schedules/{id}")).StatusCode.ShouldBe(HttpStatusCode.NoContent);
+    }
+
+    /// <summary>Runs a schedule the way the worker does, with a clock set to <paramref name="now"/>.</summary>
+    private async Task AsScheduleWorkerAsync(ErpApiFixture.TenantSession t, Guid scheduleId, DateTime now, string expectedStatus)
+    {
+        await using var scope = fixture.Factory.Services.CreateAsyncScope();
+        var tenant = scope.ServiceProvider.GetRequiredService<ITenantContext>();
+        tenant.SetTenant(t.TenantId);
+        tenant.SetCompany(t.CompanyId);
+        var executor = ActivatorUtilities.CreateInstance<Erp.Modules.Reporting.Application.ReportScheduleExecutor>(scope.ServiceProvider, new FixedClock(now));
+        var result = await executor.RunAsync(scheduleId, Erp.Modules.Reporting.Application.ReportScheduleExecutor.ScheduledTrigger, Ct);
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.Message : null);
+        result.Value.Status.ShouldBe(expectedStatus);
+        var again = await executor.RunAsync(scheduleId, Erp.Modules.Reporting.Application.ReportScheduleExecutor.ScheduledTrigger, Ct);
+        again.IsFailure.ShouldBeTrue();
+        again.Error.Code.ShouldBe("reporting.schedule-not-due");
+    }
+
+    private sealed class FixedClock(DateTime now) : IClock
+    {
+        public DateTime UtcNow => now;
+    }
+
+    [Fact]
+    public async Task Read_models_match_the_live_reports_and_can_be_rebuilt()
+    {
+        var (c, _, _, _, _, _, _) = await SeedAsync();
+        var processor = fixture.Factory.Services.GetRequiredService<IOutboxProcessor>();
+        for (var i = 0; i < 10 && await processor.ProcessPendingAsync(Ct) > 0; i++)
+        {
+        }
+
+        var live = await Get(c.T, $"{Api}/sales/summary?from=2026-01-01&to=2026-12-31&groupBy=day");
+        var model = await Get(c.T, $"{Api}/sales/daily-summary?from=2026-01-01&to=2026-12-31");
+        Rows(model).Count().ShouldBe(Rows(live).Count());
+        Total(model, "netRevenue").ShouldBe(Total(live, "netRevenue"));
+        Total(model, "cogs").ShouldBe(Total(live, "cogs"));
+        Total(model, "invoices").ShouldBe(1m);
+        Total(model, "creditNotes").ShouldBe(1m);
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        var history = await Get(c.T, $"{Api}/inventory/value-history?from={today}&to={today}");
+        var stock = await Get(c.T, $"{Api}/inventory/stock-on-hand");
+        Rows(history).Sum(r => r.GetProperty("value").GetDecimal()).ShouldBe(Total(stock, "value"));
+
+        // Rebuild recomputes the same figures.
+        var rebuilt = await Post(c.T, $"{Api}/read-models/rebuild", new { from = "2026-01-01", to = "2026-12-31" });
+        rebuilt.GetProperty("salesSummaryRows").GetInt32().ShouldBe(Rows(live).Count());
+        Total(await Get(c.T, $"{Api}/sales/daily-summary?from=2026-01-01&to=2026-12-31"), "netRevenue").ShouldBe(Total(live, "netRevenue"));
+        (await (await Send(c.T, HttpMethod.Post, $"{Api}/read-models/rebuild", new { from = "2026-12-31", to = "2026-01-01" })).ErrorCodeAsync())
+            .ShouldBe("reporting.invalid-range");
+    }
+
+    [Fact]
+    public async Task Navigation_hides_report_entries_of_disabled_modules()
+    {
+        // The services preset has sales and purchasing but neither inventory nor manufacturing.
+        var t = await fixture.NewTenantAsync(preset: "services");
+        var nav = await Get(t, "/api/v1/me/navigation");
+        var keys = nav.EnumerateArray().SelectMany(g => g.GetProperty("items").EnumerateArray()).Select(i => i.GetProperty("key").GetString()).ToList();
+        keys.ShouldContain("reporting.sales");
+        keys.ShouldContain("reporting.dashboards");
+        keys.ShouldNotContain("reporting.inventory");
+        keys.ShouldNotContain("reporting.manufacturing");
+
+        (await Send(t, HttpMethod.Put, "/api/v1/configuration/modules/inventory", new { enabled = true })).IsSuccessStatusCode.ShouldBeTrue();
+        nav = await Get(t, "/api/v1/me/navigation");
+        nav.EnumerateArray().SelectMany(g => g.GetProperty("items").EnumerateArray()).Select(i => i.GetProperty("key").GetString()).ShouldContain("reporting.inventory");
     }
 }

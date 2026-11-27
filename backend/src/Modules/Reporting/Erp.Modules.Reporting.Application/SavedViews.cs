@@ -11,6 +11,16 @@ public interface IReportingDbContext
 {
     DbSet<SavedReportView> SavedViews { get; }
 
+    DbSet<Dashboard> Dashboards { get; }
+
+    DbSet<ReportSchedule> Schedules { get; }
+
+    DbSet<ReportScheduleRun> ScheduleRuns { get; }
+
+    DbSet<DailySalesSummary> DailySalesSummaries { get; }
+
+    DbSet<StockValueSnapshot> StockValueSnapshots { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
 

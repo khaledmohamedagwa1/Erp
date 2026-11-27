@@ -31,6 +31,7 @@ public sealed class InventoryReports(IServiceProvider services, ReportLookups lo
             "Batches with on-hand stock (IInventoryReportQueries.GetBatchStockAsync)", ["days", "warehouseId", "productId", "categoryId"]),
         Def("batch-trace", "Batch traceability", "تتبع التشغيلة", "Every movement of a batch number: receipts, issues, transfers, sales and returns.",
             "Inventory movements of the batch (IInventoryReportQueries.GetLedgerAsync)", ["batchNumber", "productId", "warehouseId"]),
+        ReadModelReports.StockValueHistory,
     ];
 
     public async Task<Result<ReportOutput>> RunAsync(string key, ReportQuery q, CancellationToken ct)
@@ -43,6 +44,7 @@ public sealed class InventoryReports(IServiceProvider services, ReportLookups lo
             "valuation-by-category" => new ReportOutput(await ValuationByCategoryAsync(queries, q, ct)),
             "aging" => new ReportOutput(await AgingAsync(queries, q, ct)),
             "expiry" => new ReportOutput(await ExpiryAsync(queries, q, ct)),
+            "value-history" => new ReportOutput(await services.GetRequiredService<ReadModelReports>().StockValueHistoryAsync(q, ct)),
             "batch-trace" => string.IsNullOrWhiteSpace(q.BatchNumber)
                 ? ReportingErrors.BatchRequired
                 : await LedgerAsync(queries, q, DateOnly.MinValue, DateOnly.MaxValue, q.BatchNumber, "inventory/batch-trace", "Batch traceability", "تتبع التشغيلة", ct),

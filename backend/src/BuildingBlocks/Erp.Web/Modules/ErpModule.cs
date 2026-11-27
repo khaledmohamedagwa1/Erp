@@ -5,7 +5,12 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Erp.Web.Modules;
 
-public sealed record MenuItemDefinition(string Key, string LabelEn, string LabelAr, string Route, string Group, int Order, string? RequiredPermission);
+/// <param name="RequiredModule">
+/// Another module that must be enabled for the entry to show (e.g. the "Inventory reports" entry of the core Reporting module needs inventory).
+/// The owning module's own activation is always checked.
+/// </param>
+public sealed record MenuItemDefinition(string Key, string LabelEn, string LabelAr, string Route, string Group, int Order, string? RequiredPermission,
+    string? RequiredModule = null);
 
 /// <summary>What a module contributes to the platform: identity, dependencies, permissions and navigation.</summary>
 public sealed record ModuleManifest(

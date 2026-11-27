@@ -13,6 +13,7 @@
     <ProjectReference Include="../../Procurement/Erp.Modules.Procurement.Contracts/Erp.Modules.Procurement.Contracts.csproj" />
     <ProjectReference Include="../../Manufacturing/Erp.Modules.Manufacturing.Contracts/Erp.Modules.Manufacturing.Contracts.csproj" />
     <ProjectReference Include="../../Tax/Erp.Modules.Tax.Contracts/Erp.Modules.Tax.Contracts.csproj" />
+    <ProjectReference Include="../../Identity/Erp.Modules.Identity.Contracts/Erp.Modules.Identity.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" />

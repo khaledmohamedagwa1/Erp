@@ -54,7 +54,7 @@ public class WorkflowTests(ErpApiFixture fixture)
         return (await role.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("id").GetGuid();
     }
 
-    private async Task<Setup> NewSetupAsync(int? escalateAfterHours = null)
+    private async Task<Setup> NewSetupAsync(int? escalateAfterHours = null, string? escalationMode = null)
     {
         var t = await fixture.NewTenantAsync();
         var financeRole = await CreateRoleAsync(t, "Finance Manager", WorkflowPermissions.Approve, WorkflowPermissions.DefinitionRead);
@@ -75,6 +75,7 @@ public class WorkflowTests(ErpApiFixture fixture)
                 {
                     sequence = 1, approverKind = "Role", approverId = financeRole, requiredApprovals = 1,
                     escalateAfterHours, escalateToKind = escalateAfterHours is null ? null : "User", escalateToId = escalateAfterHours is null ? (Guid?)null : deputy.Id,
+                    escalationMode,
                 },
             },
         });
@@ -223,6 +224,66 @@ public class WorkflowTests(ErpApiFixture fixture)
         // The admin endpoint runs the same job for the current tenant (nothing is due right now).
         var run = await s.T.Client.SendAsCompanyAsync(HttpMethod.Post, "/api/v1/workflow/escalations/run", s.T.CompanyId, new { });
         (await run.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("escalated").GetInt32().ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_reassigning_escalation_takes_the_step_away_from_the_original_approvers()
+    {
+        var s = await NewSetupAsync(escalateAfterHours: 2, escalationMode: "Reassign");
+        var definitions = await (await s.T.Client.GetAsCompanyAsync("/api/v1/workflow/definitions", s.T.CompanyId)).Content.ReadFromJsonAsync<JsonElement>(Ct);
+        definitions.EnumerateArray().Single().GetProperty("steps")[0].GetProperty("escalationMode").GetString().ShouldBe("Reassign");
+
+        var (decision, _) = await SubmitAsync(s, 120_000m, s.Fm2.Id);
+        (await InboxAsync(s, s.Fm1)).GetArrayLength().ShouldBe(1);
+
+        await using (var scope = fixture.Factory.Services.CreateAsyncScope())
+        {
+            scope.ServiceProvider.GetRequiredService<ITenantContext>().SetTenant(s.T.TenantId);
+            (await scope.ServiceProvider.GetRequiredService<IDispatcher>().Send(new EscalateOverdueCommand(DateTime.UtcNow.AddHours(3)), Ct)).Value.ShouldBe(1);
+        }
+
+        // The finance manager lost the step; only the deputy can decide now.
+        (await InboxAsync(s, s.Fm1)).GetArrayLength().ShouldBe(0);
+        (await InboxAsync(s, s.Deputy)).GetArrayLength().ShouldBe(1);
+        var refused = await s.Fm1.Client.SendAsCompanyAsync(HttpMethod.Post, $"/api/v1/workflow/instances/{decision.InstanceId}/approve", s.T.CompanyId, new { });
+        (await refused.ErrorCodeAsync()).ShouldBe("workflow.not-an-approver");
+
+        var approved = await s.Deputy.Client.SendAsCompanyAsync(HttpMethod.Post, $"/api/v1/workflow/instances/{decision.InstanceId}/approve", s.T.CompanyId, new { });
+        var body = await approved.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        body.GetProperty("status").GetString().ShouldBe("Approved");
+        body.GetProperty("steps")[0].GetProperty("reassigned").GetBoolean().ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Condition_groups_give_any_of_logic_between_groups_and_all_of_within_a_group()
+    {
+        var s = await NewSetupAsync();
+        var definitions = await (await s.T.Client.GetAsCompanyAsync("/api/v1/workflow/definitions", s.T.CompanyId)).Content.ReadFromJsonAsync<JsonElement>(Ct);
+        var original = definitions.EnumerateArray().Single().GetProperty("id").GetGuid();
+        (await s.T.Client.SendAsCompanyAsync(HttpMethod.Post, $"/api/v1/workflow/definitions/{original}/deactivate", s.T.CompanyId, new { })).EnsureSuccessStatusCode();
+
+        // (amount > 50,000 AND amount < 60,000) OR amount >= 100,000
+        var created = await s.T.Client.SendAsCompanyAsync(HttpMethod.Post, "/api/v1/workflow/definitions", s.T.CompanyId, new
+        {
+            documentType = ApprovalDocumentTypes.SalesInvoice,
+            name = "Band or large",
+            priority = 5,
+            conditions = new object[]
+            {
+                new { fact = "amount", @operator = "GreaterThan", value = "50000", group = 1 },
+                new { fact = "amount", @operator = "LessThan", value = "60000", group = 1 },
+                new { fact = "amount", @operator = "GreaterOrEqual", value = "100000", group = 2 },
+            },
+            steps = new[] { new { sequence = 1, approverKind = "Role", approverId = s.FinanceRoleId, requiredApprovals = 1 } },
+        });
+        created.StatusCode.ShouldBe(HttpStatusCode.Created);
+        var dto = await created.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        dto.GetProperty("conditions").EnumerateArray().Select(c => c.GetProperty("group").GetInt32()).ShouldBe([1, 1, 2]);
+
+        (await SubmitAsync(s, 40_000m, s.Fm2.Id)).Decision.Required.ShouldBeFalse();
+        (await SubmitAsync(s, 55_000m, s.Fm2.Id)).Decision.Required.ShouldBeTrue();
+        (await SubmitAsync(s, 70_000m, s.Fm2.Id)).Decision.Required.ShouldBeFalse();
+        (await SubmitAsync(s, 150_000m, s.Fm2.Id)).Decision.Required.ShouldBeTrue();
     }
 
     [Fact]

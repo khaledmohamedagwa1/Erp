@@ -299,6 +299,8 @@ namespace Erp.Modules.Workflow.Infrastructure.Migrations
                             b1.Property<string>("Fact")
                                 .IsRequired();
 
+                            b1.Property<int?>("Group");
+
                             b1.Property<string>("Operator")
                                 .IsRequired();
 
@@ -334,6 +336,8 @@ namespace Erp.Modules.Workflow.Infrastructure.Migrations
                             b1.Property<Guid?>("EscalateToId");
 
                             b1.Property<string>("EscalateToKind");
+
+                            b1.Property<string>("EscalationMode");
 
                             b1.Property<int>("RequiredApprovals");
 
@@ -409,6 +413,8 @@ namespace Erp.Modules.Workflow.Infrastructure.Migrations
 
                             b1.Property<int>("StepSequence");
 
+                            b1.Property<bool?>("Superseded");
+
                             b1.HasKey("ApprovalInstanceId", "__synthesizedOrdinal");
 
                             b1.ToTable("ApprovalInstance", "workflow");
@@ -440,6 +446,8 @@ namespace Erp.Modules.Workflow.Infrastructure.Migrations
                             b1.Property<string>("EscalateToKind");
 
                             b1.Property<bool>("Escalated");
+
+                            b1.Property<string>("EscalationMode");
 
                             b1.Property<int>("RequiredApprovals");
 

@@ -16,6 +16,10 @@ public interface IFixedAssetsDbContext
 
     DbSet<DepreciationRun> DepreciationRuns { get; }
 
+    DbSet<DepreciationBook> Books { get; }
+
+    DbSet<AssetSettings> Settings { get; }
+
     EntityEntry<TEntity> Entry<TEntity>(TEntity entity)
         where TEntity : class;
 
@@ -37,7 +41,36 @@ public static class FixedAssetsAppErrors
     public static readonly Error NothingToDepreciate = Error.Conflict("assets.nothing-to-depreciate", "No depreciation is due for this legal entity and period.");
     public static readonly Error NotLatestRun = Error.Conflict("assets.not-latest-run", "Only the latest posted run of the legal entity can be reversed.");
     public static readonly Error CrossLegalEntity = Error.Conflict("assets.cross-legal-entity",
-        "Assets cannot move between legal entities; dispose and acquire instead.");
+        "Assets cannot move between legal entities by editing; use the legal-entity transfer.");
+    public static readonly Error BookNotFound = Error.NotFound("assets.book-not-found", "The depreciation book was not found or is inactive.");
+    public static readonly Error BookCodeTaken = Error.Conflict("assets.book-code-taken", "A depreciation book with this code already exists.");
+    public static readonly Error SourceTypeUnsupported = Error.Validation("assets.source-type-unsupported", "A purchase-invoice acquisition must reference a PurchaseInvoice.");
+    public static readonly Error SourceInvoiceNotFound = Error.NotFound("assets.source-invoice-not-found", "The purchase invoice was not found in this company.");
+    public static readonly Error SourceInvoiceNotPosted = Error.Conflict("assets.source-invoice-not-posted", "The purchase invoice is not posted.");
+    public static readonly Error SourceInvoiceOtherLegalEntity = Error.Validation("assets.source-invoice-other-legal-entity",
+        "The purchase invoice belongs to another legal entity.");
+    public static readonly Error SourceLineNotFound = Error.NotFound("assets.source-line-not-found", "The purchase invoice line was not found.");
+    public static readonly Error SourceAmountMismatch = Error.Conflict("assets.source-amount-mismatch",
+        "The capitalised cost exceeds the purchase invoice amount (including assets already capitalised from it).");
+    public static readonly Error PartialQuantityOrPercent = Error.Validation("assets.partial-quantity-or-percent", "Give either a quantity or a percentage to dispose.");
+    public static readonly Error PartiallyDisposed = Error.Conflict("assets.partially-disposed",
+        "An asset of this run was partially disposed after the run; the run can no longer be reversed.");
+    public static readonly Error SameLegalEntity = Error.Validation("assets.same-legal-entity", "The target legal entity is the asset's own legal entity.");
+    public static readonly Error TransferCurrencyMismatch = Error.Validation("assets.transfer-currency-mismatch",
+        "Both legal entities must have the same functional currency.");
+    public static readonly Error TransferWithReserve = Error.Conflict("assets.transfer-with-reserve",
+        "Assets with a revaluation reserve cannot be transferred between legal entities.");
+}
+
+public sealed class FixedAssetsOptions
+{
+    public const string SectionName = "FixedAssets";
+
+    /// <summary>How far (in the functional currency) the capitalised cost may exceed the purchase invoice line before activation is refused.</summary>
+    public decimal InvoiceMatchTolerance { get; set; } = 1m;
+
+    /// <summary>How often the worker checks whether automatic depreciation is due.</summary>
+    public int ScheduleIntervalMinutes { get; set; } = 60;
 }
 
 /// <summary>Resolves the legal entity (must belong to the active company) and validates user-chosen accounts.</summary>

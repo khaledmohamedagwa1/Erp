@@ -152,16 +152,18 @@ public sealed class EligibilityResolver(IWorkflowDbContext db, IUserDirectory us
 }
 
 // ---------- DTOs ----------
-public sealed record ConditionDto(string Fact, string Operator, string Value);
+public sealed record ConditionDto(string Fact, string Operator, string Value, int Group);
 
-public sealed record StepDto(int Sequence, string ApproverKind, Guid ApproverId, int RequiredApprovals, int? EscalateAfterHours, string? EscalateToKind, Guid? EscalateToId);
+public sealed record StepDto(int Sequence, string ApproverKind, Guid ApproverId, int RequiredApprovals, int? EscalateAfterHours, string? EscalateToKind, Guid? EscalateToId,
+    string EscalationMode);
 
 public sealed record DefinitionDto(Guid Id, string DocumentType, string Name, bool IsActive, int Priority, IReadOnlyList<ConditionDto> Conditions,
     IReadOnlyList<StepDto> Steps, byte[] RowVersion);
 
-public sealed record InstanceStepDto(int Sequence, string ApproverKind, Guid ApproverId, int RequiredApprovals, int Approvals, int? EscalateAfterHours, bool Escalated);
+public sealed record InstanceStepDto(int Sequence, string ApproverKind, Guid ApproverId, int RequiredApprovals, int Approvals, int? EscalateAfterHours, bool Escalated,
+    string EscalationMode, bool Reassigned);
 
-public sealed record AssignedApproverDto(int StepSequence, string Kind, Guid ApproverId, string Source);
+public sealed record AssignedApproverDto(int StepSequence, string Kind, Guid ApproverId, string Source, bool Active);
 
 public sealed record ActionDto(string Kind, int StepSequence, Guid? UserId, Guid? OnBehalfOf, Guid? TargetId, string? Reason, DateTime AtUtc);
 
@@ -190,33 +192,38 @@ public sealed record InboxItemDto(Guid InstanceId, string DocumentType, Guid Doc
 
 public sealed record DelegationDto(Guid Id, Guid FromUserId, Guid ToUserId, DateOnly ValidFrom, DateOnly ValidTo, string? DocumentType, bool IsActive);
 
-public sealed record ConditionInput(string Fact, string Operator, string Value);
+/// <param name="Group">OR group: conditions in the same group must all hold; the rule applies when any group holds. Null/0 = group 0.</param>
+public sealed record ConditionInput(string Fact, string Operator, string Value, int? Group = null);
 
-public sealed record StepInput(int Sequence, string ApproverKind, Guid ApproverId, int RequiredApprovals, int? EscalateAfterHours, string? EscalateToKind, Guid? EscalateToId);
+/// <param name="EscalationMode">AddApprover (default) or Reassign.</param>
+public sealed record StepInput(int Sequence, string ApproverKind, Guid ApproverId, int RequiredApprovals, int? EscalateAfterHours, string? EscalateToKind, Guid? EscalateToId,
+    string? EscalationMode = null);
 
 internal static class WorkflowMapping
 {
     public static DefinitionDto ToDto(ApprovalDefinition d, byte[] rowVersion) => new(d.Id, d.DocumentType, d.Name, d.IsActive, d.Priority,
-        d.Conditions.Select(c => new ConditionDto(c.Fact, c.Operator.ToString(), c.Value)).ToList(),
+        d.Conditions.Select(c => new ConditionDto(c.Fact, c.Operator.ToString(), c.Value, c.GroupKey)).ToList(),
         d.Steps.Select(s => new StepDto(s.Sequence, s.ApproverKind.ToString(), s.ApproverId, s.RequiredApprovals, s.EscalateAfterHours,
-            s.EscalateToKind?.ToString(), s.EscalateToId)).ToList(),
+            s.EscalateToKind?.ToString(), s.EscalateToId, (s.EscalationMode ?? EscalationMode.AddApprover).ToString())).ToList(),
         rowVersion);
 
     public static InstanceDto ToDto(ApprovalInstance i) => new(i.Id, i.DocumentType, i.DocumentId, i.DocumentNumber, i.RequestedBy, i.DefinitionName,
         i.Amount, i.Currency, i.AmountBase, i.BranchId, FactsJson.Read(i.FactsJson), i.Status.ToString(), i.CurrentStep, i.SubmittedAtUtc, i.CompletedAtUtc,
         i.Steps.Select(s => new InstanceStepDto(s.Sequence, s.ApproverKind.ToString(), s.ApproverId, s.RequiredApprovals,
-            i.Actions.Count(a => a.Kind == ApprovalActionKind.Approved && a.StepSequence == s.Sequence), s.EscalateAfterHours, s.Escalated)).ToList(),
-        i.AssignedApprovers.Select(a => new AssignedApproverDto(a.StepSequence, a.Kind.ToString(), a.ApproverId, a.Source.ToString())).ToList(),
+            i.Actions.Count(a => a.Kind == ApprovalActionKind.Approved && a.StepSequence == s.Sequence), s.EscalateAfterHours, s.Escalated,
+            (s.EscalationMode ?? EscalationMode.AddApprover).ToString(), s.IsReassigned)).ToList(),
+        i.AssignedApprovers.Select(a => new AssignedApproverDto(a.StepSequence, a.Kind.ToString(), a.ApproverId, a.Source.ToString(), a.IsActive)).ToList(),
         i.Actions.Select(a => new ActionDto(a.Kind.ToString(), a.StepSequence, a.UserId, a.OnBehalfOf, a.TargetId, a.Reason, a.AtUtc)).ToList());
 
     public static DelegationDto ToDto(ApprovalDelegation d) => new(d.Id, d.FromUserId, d.ToUserId, d.ValidFrom, d.ValidTo, d.DocumentType, d.IsActive);
 
     public static IReadOnlyList<ApprovalCondition> Conditions(IEnumerable<ConditionInput>? inputs) =>
-        (inputs ?? []).Select(c => new ApprovalCondition(c.Fact, Enum.Parse<ConditionOperator>(c.Operator, true), c.Value)).ToList();
+        (inputs ?? []).Select(c => new ApprovalCondition(c.Fact, Enum.Parse<ConditionOperator>(c.Operator, true), c.Value, c.Group)).ToList();
 
     public static IReadOnlyList<ApprovalStep> Steps(IEnumerable<StepInput>? inputs) =>
         (inputs ?? []).Select(s => new ApprovalStep(s.Sequence, Enum.Parse<ApproverKind>(s.ApproverKind, true), s.ApproverId, s.RequiredApprovals,
-            s.EscalateAfterHours, s.EscalateToKind is null ? null : Enum.Parse<ApproverKind>(s.EscalateToKind, true), s.EscalateToId)).ToList();
+            s.EscalateAfterHours, s.EscalateToKind is null ? null : Enum.Parse<ApproverKind>(s.EscalateToKind, true), s.EscalateToId,
+            string.IsNullOrWhiteSpace(s.EscalationMode) ? null : Enum.Parse<EscalationMode>(s.EscalationMode, true))).ToList();
 }
 
 internal static class WorkflowInputRules
@@ -227,8 +234,9 @@ internal static class WorkflowInputRules
             .WithMessage("Operators: GreaterThan, GreaterOrEqual, LessThan, LessOrEqual, Equal, In.");
         steps.NotEmpty().Must(list => list is not null && list.All(s =>
                 Enum.TryParse<ApproverKind>(s.ApproverKind, true, out _) &&
-                (s.EscalateToKind is null || Enum.TryParse<ApproverKind>(s.EscalateToKind, true, out _))))
-            .WithMessage("Approver kinds: Role, User.");
+                (s.EscalateToKind is null || Enum.TryParse<ApproverKind>(s.EscalateToKind, true, out _)) &&
+                (string.IsNullOrWhiteSpace(s.EscalationMode) || Enum.TryParse<EscalationMode>(s.EscalationMode, true, out _))))
+            .WithMessage("Approver kinds: Role, User. Escalation modes: AddApprover, Reassign.");
     }
 }
 
@@ -608,8 +616,14 @@ public sealed class ApprovalStepAssignedNotifier(
         }
 
         var step = instance.Current;
-        var approvers = new List<(ApproverKind Kind, Guid Id)> { (step.ApproverKind, step.ApproverId) };
-        approvers.AddRange(instance.AssignedApprovers.Where(a => a.StepSequence == step.Sequence).Select(a => (a.Kind, a.ApproverId)));
+        // After a reassigning escalation only the active assigned approvers (the escalation target and its delegates) are told.
+        var approvers = new List<(ApproverKind Kind, Guid Id)>();
+        if (!step.IsReassigned)
+        {
+            approvers.Add((step.ApproverKind, step.ApproverId));
+        }
+
+        approvers.AddRange(instance.AssignedApprovers.Where(a => a.StepSequence == step.Sequence && a.IsActive).Select(a => (a.Kind, a.ApproverId)));
 
         var recipients = new Dictionary<Guid, UserSummary>();
         foreach (var (kind, id) in approvers.Distinct())

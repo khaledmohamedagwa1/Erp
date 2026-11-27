@@ -28,6 +28,10 @@ public sealed class ReportService(
 
     public IEnumerable<ReportDefinition> AllDefinitions => areas.SelectMany(a => a.Definitions);
 
+    /// <summary>A runnable (non-link) report of an available area by "area/key".</summary>
+    public ReportDefinition? FindRunnable(string fullKey) =>
+        areas.Where(a => a.IsAvailable).SelectMany(a => a.Definitions).FirstOrDefault(d => !d.IsLink && string.Equals(d.FullKey, fullKey, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Reports the current user may run in the active company: permission granted, module enabled and installed.</summary>
     public async Task<Result<IReadOnlyList<ReportCatalogueEntry>>> CatalogueAsync(CancellationToken ct)
     {
@@ -37,6 +41,11 @@ public sealed class ReportService(
         }
 
         var granted = user.UserId is { } userId ? await permissions.GetPermissionsAsync(userId, ct) : new HashSet<string>();
+        return await CatalogueForAsync(companyId, granted, ct);
+    }
+
+    private async Task<Result<IReadOnlyList<ReportCatalogueEntry>>> CatalogueForAsync(Guid companyId, IReadOnlySet<string> granted, CancellationToken ct)
+    {
         var enabled = await modules.GetEnabledModulesAsync(companyId, ct);
         return areas.Where(a => a.IsAvailable)
             .SelectMany(a => a.Definitions)
@@ -46,8 +55,11 @@ public sealed class ReportService(
             .ToList();
     }
 
-    /// <summary>Finds the report and checks that the user may run it in the active company.</summary>
-    public async Task<Result<ReportDefinition>> AuthorizeAsync(string area, string key, CancellationToken ct)
+    /// <summary>
+    /// Finds the report and checks that the user may run it in the active company. <paramref name="asUserId"/> runs the check for another
+    /// user (scheduled reports run with their owner's permissions); otherwise the signed-in user is checked.
+    /// </summary>
+    public async Task<Result<ReportDefinition>> AuthorizeAsync(string area, string key, CancellationToken ct, Guid? asUserId = null)
     {
         var reportArea = areas.FirstOrDefault(a => string.Equals(a.Area, area, StringComparison.OrdinalIgnoreCase));
         var definition = reportArea?.Definitions.FirstOrDefault(d => string.Equals(d.Key, key, StringComparison.OrdinalIgnoreCase));
@@ -61,7 +73,7 @@ public sealed class ReportService(
             return ReportingErrors.CompanyRequired;
         }
 
-        if (user.UserId is not { } userId || !await permissions.HasPermissionAsync(userId, definition.Permission, ct))
+        if ((asUserId ?? user.UserId) is not { } userId || !await permissions.HasPermissionAsync(userId, definition.Permission, ct))
         {
             return ReportingErrors.Forbidden(definition.Permission);
         }
@@ -69,12 +81,19 @@ public sealed class ReportService(
         return await modules.IsEnabledAsync(companyId, definition.ModuleCode, ct) ? definition : ReportingErrors.ModuleDisabled;
     }
 
-    public async Task<Result<ReportRun>> RunAsync(string area, string key, ReportRequest request, bool forExport, bool arabic, CancellationToken ct)
+    public async Task<Result<ReportRun>> RunAsync(string area, string key, ReportRequest request, bool forExport, bool arabic, CancellationToken ct,
+        Guid? asUserId = null)
     {
-        var authorized = await AuthorizeAsync(area, key, ct);
+        var authorized = await AuthorizeAsync(area, key, ct, asUserId);
         if (authorized.IsFailure)
         {
             return authorized.Error;
+        }
+
+        if (authorized.Value.IsLink)
+        {
+            // Link entries (e.g. the accounting statements) live in their own module; they cannot feed widgets or schedules.
+            return ReportingErrors.LinkReport;
         }
 
         var definition = authorized.Value;
