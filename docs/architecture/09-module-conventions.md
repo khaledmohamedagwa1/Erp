@@ -44,3 +44,5 @@ contract services called in the same transaction (ADR-006); everything else thro
 | 130 | Manufacturing | manufacturing | manufacturing |
 | 140 | Workflow | workflow | workflow |
 | 150 | Fixed assets | assets | fixed-assets |
+| 160 | Reporting | reporting | reporting |
+| 170 | Data import | import | import |

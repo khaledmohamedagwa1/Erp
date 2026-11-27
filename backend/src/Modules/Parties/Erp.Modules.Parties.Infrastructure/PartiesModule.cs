@@ -64,6 +64,7 @@ public sealed class PartiesModule : IErpModule
         services.AddErpDbContext<PartiesDbContext>(PartiesDbContext.SchemaName, order: 50);
         services.AddScoped<IPartiesDbContext>(sp => sp.GetRequiredService<PartiesDbContext>());
         services.AddScoped<IPartyQueries, PartyQueries>();
+        services.AddScoped<IPartyImportService, PartyImportService>();
         services.AddScoped<IPartyReportQueries, PartyReportQueries>();
         services.AddHandlersFromAssembly(typeof(IPartiesDbContext).Assembly);
         services.AddSingleton(new EventAssembly(typeof(Domain.Customer).Assembly));

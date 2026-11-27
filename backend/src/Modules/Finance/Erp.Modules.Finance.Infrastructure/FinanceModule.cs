@@ -49,6 +49,7 @@ public sealed class FinanceModule : IErpModule
             new(FinancePermissions.ExpensePost, "finance", "Post expenses", "ترحيل المصروفات", IsSensitive: true),
             new(FinancePermissions.ReconciliationManage, "finance", "Reconcile bank statements", "تسوية كشوف البنوك"),
             new(FinancePermissions.RevaluationRun, "finance", "Run foreign-currency revaluation", "تشغيل إعادة تقييم العملات", IsSensitive: true),
+            new(FinanceOpeningPermissions.OpeningBalanceManage, "finance", "Create opening receivables and payables (posts journals)", "إنشاء أرصدة افتتاحية للعملاء والموردين (يرحّل قيوداً)", IsSensitive: true),
         ],
         Menu:
         [
@@ -69,6 +70,7 @@ public sealed class FinanceModule : IErpModule
         services.AddScoped<ISubledgerService>(sp => sp.GetRequiredService<SubledgerService>());
         services.AddScoped<ICreditExposureQueries, CreditExposureQueries>();
         services.AddScoped<IOpenItemQueries, OpenItemQueries>();
+        services.AddScoped<IFinanceImportService, FinanceImportService>();
         services.AddScoped<ICashBankAccountQueries, CashBankAccountQueries>();
         services.AddScoped<IFinanceDocumentQueries, FinanceDocumentQueries>();
         services.AddHandlersFromAssembly(typeof(IFinanceDbContext).Assembly);

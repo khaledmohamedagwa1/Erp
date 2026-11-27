@@ -43,6 +43,7 @@ public sealed class OrganizationModule : IErpModule
         services.AddErpDbContext<OrganizationDbContext>(OrganizationDbContext.SchemaName, order: 10);
         services.AddScoped<IOrganizationDbContext>(sp => sp.GetRequiredService<OrganizationDbContext>());
         services.AddScoped<IOrganizationQueries, OrganizationQueries>();
+        services.AddScoped<IOrganizationLookups, OrganizationLookups>();
         services.AddScoped<IOrganizationReportQueries, OrganizationReportQueries>();
         services.AddSingleton<ITenantDirectory, TenantDirectory>();
         services.AddHandlersFromAssembly(typeof(IOrganizationDbContext).Assembly);

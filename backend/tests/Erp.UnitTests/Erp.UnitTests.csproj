@@ -32,6 +32,7 @@
     <ProjectReference Include="../../src/Modules/FixedAssets/Erp.Modules.FixedAssets.Application/Erp.Modules.FixedAssets.Application.csproj" />
     <ProjectReference Include="../../src/Modules/Procurement/Erp.Modules.Procurement.Domain/Erp.Modules.Procurement.Domain.csproj" />
     <ProjectReference Include="../../src/Modules/Reporting/Erp.Modules.Reporting.Infrastructure/Erp.Modules.Reporting.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/Modules/Import/Erp.Modules.Import.Infrastructure/Erp.Modules.Import.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
