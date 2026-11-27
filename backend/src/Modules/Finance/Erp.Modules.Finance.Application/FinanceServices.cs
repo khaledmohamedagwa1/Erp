@@ -502,3 +502,11 @@ public sealed class OpenItemQueries(IFinanceDbContext db) : IOpenItemQueries
 
     private static AgingRow Row(Guid partyId, decimal[] b) => new(partyId, b[0], b[1], b[2], b[3], b[4], b.Sum());
 }
+
+public sealed class CashBankAccountQueries(IFinanceDbContext db) : ICashBankAccountQueries
+{
+    public async Task<CashBankAccountInfo?> GetAsync(Guid cashBankAccountId, CancellationToken cancellationToken = default) =>
+        await db.CashBankAccounts.AsNoTracking().Where(a => a.Id == cashBankAccountId)
+            .Select(a => new CashBankAccountInfo(a.Id, a.LegalEntityId, a.Kind.ToString(), a.Code, a.Name, a.Currency, a.GlAccountId, a.IsActive))
+            .FirstOrDefaultAsync(cancellationToken);
+}

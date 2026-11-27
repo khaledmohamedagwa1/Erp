@@ -71,6 +71,12 @@
     <Project Path="src/Modules/Parties/Erp.Modules.Parties.Domain/Erp.Modules.Parties.Domain.csproj" />
     <Project Path="src/Modules/Parties/Erp.Modules.Parties.Infrastructure/Erp.Modules.Parties.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/Pos/">
+    <Project Path="src/Modules/Pos/Erp.Modules.Pos.Application/Erp.Modules.Pos.Application.csproj" />
+    <Project Path="src/Modules/Pos/Erp.Modules.Pos.Contracts/Erp.Modules.Pos.Contracts.csproj" />
+    <Project Path="src/Modules/Pos/Erp.Modules.Pos.Domain/Erp.Modules.Pos.Domain.csproj" />
+    <Project Path="src/Modules/Pos/Erp.Modules.Pos.Infrastructure/Erp.Modules.Pos.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Modules/Procurement/">
     <Project Path="src/Modules/Procurement/Erp.Modules.Procurement.Application/Erp.Modules.Procurement.Application.csproj" />
     <Project Path="src/Modules/Procurement/Erp.Modules.Procurement.Contracts/Erp.Modules.Procurement.Contracts.csproj" />

@@ -771,7 +771,20 @@ public sealed class PartyQueries(IPartiesDbContext db, ITenantContext tenant, IO
             ?? throw new InvalidOperationException($"Company {companyId} not found.");
         var walkIn = Customer.CreateWalkIn(companyId, company.BaseCurrency);
         db.Customers.Add(walkIn);
-        await db.SaveChangesAsync(cancellationToken);
-        return walkIn.Id;
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+            return walkIn.Id;
+        }
+        catch (DbUpdateException)
+        {
+            // A concurrent first caller created it: the unique index (one walk-in per company) made this insert wait for
+            // that transaction and then fail. Drop our attempt and return the committed row.
+            db.Entry(walkIn).State = EntityState.Detached;
+            var created = await db.Customers.IgnoreQueryFilters().AsNoTracking()
+                .Where(c => EF.Property<Guid>(c, "TenantId") == tenantId && c.CompanyId == companyId && c.IsWalkIn)
+                .Select(c => (Guid?)c.Id).FirstOrDefaultAsync(cancellationToken);
+            return created ?? throw new InvalidOperationException("The walk-in customer could not be created.");
+        }
     }
 }
