@@ -29,6 +29,12 @@
     <Project Path="src/Modules/Configuration/Erp.Modules.Configuration.Domain/Erp.Modules.Configuration.Domain.csproj" />
     <Project Path="src/Modules/Configuration/Erp.Modules.Configuration.Infrastructure/Erp.Modules.Configuration.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/Finance/">
+    <Project Path="src/Modules/Finance/Erp.Modules.Finance.Application/Erp.Modules.Finance.Application.csproj" />
+    <Project Path="src/Modules/Finance/Erp.Modules.Finance.Contracts/Erp.Modules.Finance.Contracts.csproj" />
+    <Project Path="src/Modules/Finance/Erp.Modules.Finance.Domain/Erp.Modules.Finance.Domain.csproj" />
+    <Project Path="src/Modules/Finance/Erp.Modules.Finance.Infrastructure/Erp.Modules.Finance.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Modules/Identity/">
     <Project Path="src/Modules/Identity/Erp.Modules.Identity.Application/Erp.Modules.Identity.Application.csproj" />
     <Project Path="src/Modules/Identity/Erp.Modules.Identity.Contracts/Erp.Modules.Identity.Contracts.csproj" />
