@@ -82,12 +82,14 @@ public sealed class ProcurementInvoiceSettledHandler(IUnitOfWork unitOfWork, IIn
 /// <summary>Open purchase-order supply (ordered, not yet received) for planning (MRP / availability).</summary>
 public sealed class ProcurementQueries(IProcurementDbContext db, ProductLookup products) : IProcurementQueries
 {
-    public async Task<IReadOnlyList<OpenSupplyLine>> GetOpenSupplyAsync(IReadOnlyCollection<Guid> productIds, Guid? warehouseId = null, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<OpenSupplyLine>> GetOpenSupplyAsync(IReadOnlyCollection<Guid> productIds, Guid? warehouseId = null, CancellationToken cancellationToken = default) =>
+        productIds.Count == 0 ? [] : await LoadOpenSupplyAsync(productIds.ToHashSet(), warehouseId, cancellationToken);
+
+    public Task<IReadOnlyList<OpenSupplyLine>> GetAllOpenSupplyAsync(Guid? warehouseId = null, CancellationToken cancellationToken = default) =>
+        LoadOpenSupplyAsync(null, warehouseId, cancellationToken);
+
+    private async Task<IReadOnlyList<OpenSupplyLine>> LoadOpenSupplyAsync(HashSet<Guid>? wanted, Guid? warehouseId, CancellationToken cancellationToken)
     {
-        if (productIds.Count == 0)
-        {
-            return [];
-        }
 
         var source = db.Orders.AsNoTracking()
             .Where(o => o.Status == PurchaseOrderStatus.Approved || o.Status == PurchaseOrderStatus.Sent || o.Status == PurchaseOrderStatus.PartiallyReceived);
@@ -97,8 +99,7 @@ public sealed class ProcurementQueries(IProcurementDbContext db, ProductLookup p
         }
 
         var orders = await source.ToListAsync(cancellationToken);
-        var wanted = productIds.ToHashSet();
-        var lines = orders.SelectMany(o => o.Lines.Where(l => wanted.Contains(l.ProductId) && l.OpenQuantity > 0).Select(l => (Order: o, Line: l))).ToList();
+        var lines = orders.SelectMany(o => o.Lines.Where(l => (wanted is null || wanted.Contains(l.ProductId)) && l.OpenQuantity > 0).Select(l => (Order: o, Line: l))).ToList();
         if (lines.Count == 0)
         {
             return [];

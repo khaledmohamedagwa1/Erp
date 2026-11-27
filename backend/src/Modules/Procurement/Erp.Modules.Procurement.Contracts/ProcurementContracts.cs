@@ -17,6 +17,9 @@ public interface IProcurementQueries
 {
     /// <summary>Open supply of approved/sent/partially received purchase orders of the active company.</summary>
     Task<IReadOnlyList<OpenSupplyLine>> GetOpenSupplyAsync(IReadOnlyCollection<Guid> productIds, Guid? warehouseId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Open supply for every product of the active company (used by MRP).</summary>
+    Task<IReadOnlyList<OpenSupplyLine>> GetAllOpenSupplyAsync(Guid? warehouseId = null, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Source document types used by procurement for inventory movements, journals and open items.</summary>

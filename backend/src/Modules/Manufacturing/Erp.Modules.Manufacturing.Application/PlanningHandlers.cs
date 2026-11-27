@@ -67,13 +67,20 @@ public sealed class SalesOrderDemandNotConnected : IMrpDemandSource
         Task.FromResult<IReadOnlyList<MrpDemand>>([]);
 }
 
-/// <summary>Placeholder until Procurement registers its open purchase-order supply source.</summary>
-public sealed class PurchaseOrderSupplyNotConnected : IMrpSupplySource
+/// <summary>Open purchase-order lines (approved, sent, partially received) as MRP supply, in base units.</summary>
+public sealed class PurchaseOrderMrpSource(Erp.Modules.Procurement.Contracts.IProcurementQueries procurement, IClock clock) : IMrpSupplySource
 {
-    public string Name => "purchase-orders (not connected)";
+    public string Name => "purchase-orders";
 
-    public Task<IReadOnlyList<MrpSupply>> GetSupplyAsync(Guid companyId, DateOnly horizonEnd, CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<MrpSupply>>([]);
+    public async Task<IReadOnlyList<MrpSupply>> GetSupplyAsync(Guid companyId, DateOnly horizonEnd, CancellationToken cancellationToken = default)
+    {
+        var today = DateOnly.FromDateTime(clock.UtcNow);
+        var lines = await procurement.GetAllOpenSupplyAsync(cancellationToken: cancellationToken);
+        // Lines without an expected date are assumed available today; lines due after the horizon are ignored.
+        return lines.Select(l => new MrpSupply(l.ProductId, l.OpenBaseQuantity, l.ExpectedDate ?? today, "PurchaseOrder", l.PurchaseOrderNumber))
+            .Where(s => s.Quantity > 0 && s.DueDate <= horizonEnd)
+            .ToList();
+    }
 }
 
 // ---------- Run ----------
