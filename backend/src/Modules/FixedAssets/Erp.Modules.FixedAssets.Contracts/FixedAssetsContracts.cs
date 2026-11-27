@@ -16,4 +16,7 @@ public static class FixedAssetDocumentTypes
     public const string DepreciationRun = "DepreciationRun";
     public const string Revaluation = "AssetRevaluation";
     public const string Disposal = "AssetDisposal";
+    public const string Impairment = "AssetImpairment";
+    public const string PartialDisposal = "AssetPartialDisposal";
+    public const string Transfer = "AssetTransfer";
 }

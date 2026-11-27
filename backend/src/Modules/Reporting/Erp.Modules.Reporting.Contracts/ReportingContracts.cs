@@ -9,6 +9,10 @@ public static class ReportingPermissions
     public const string TaxRead = "reporting.tax.read";
     public const string DocumentPrint = "reporting.document.print";
     public const string ViewManage = "reporting.view.manage";
+    public const string DashboardRead = "reporting.dashboard.read";
+    public const string DashboardManage = "reporting.dashboard.manage";
+    public const string ScheduleManage = "reporting.schedule.manage";
+    public const string ReadModelRebuild = "reporting.read-model.rebuild";
 }
 
 /// <summary>Report areas used in <c>/api/v1/reports/{area}/{report}</c>.</summary>

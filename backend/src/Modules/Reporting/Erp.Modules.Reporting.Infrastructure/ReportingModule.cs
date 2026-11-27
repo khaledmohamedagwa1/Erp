@@ -59,6 +59,10 @@ public sealed class ReportParameters
 
 public sealed record CreateSavedViewRequest(string Name, string ReportKey, System.Text.Json.JsonElement? Filters);
 
+public sealed record DashboardRequest(string Name, string? Description, IReadOnlyList<Guid>? SharedWithRoleIds, IReadOnlyList<WidgetInput>? Widgets);
+
+public sealed record RebuildReadModelsRequest(DateOnly From, DateOnly To);
+
 public sealed class ReportingModule : IErpModule
 {
     public const string Code = "reporting";
@@ -78,14 +82,21 @@ public sealed class ReportingModule : IErpModule
             new(ReportingPermissions.TaxRead, Code, "Run tax reports (VAT return, withholding)", "تشغيل تقارير الضرائب (إقرار القيمة المضافة والخصم من المنبع)"),
             new(ReportingPermissions.DocumentPrint, Code, "Print posted documents (invoices, credit notes, orders, receipts, vouchers)", "طباعة المستندات المرحلة"),
             new(ReportingPermissions.ViewManage, Code, "Save and delete personal report views", "حفظ وحذف طرق العرض الشخصية للتقارير"),
+            new(ReportingPermissions.DashboardRead, Code, "View my dashboards and dashboards shared with my roles", "عرض لوحات المعلومات الخاصة بي والمشاركة مع أدواري"),
+            new(ReportingPermissions.DashboardManage, Code, "Create dashboards and share them with roles", "إنشاء لوحات المعلومات ومشاركتها مع الأدوار"),
+            new(ReportingPermissions.ScheduleManage, Code, "Schedule reports to be run and emailed", "جدولة التقارير لتشغيلها وإرسالها بالبريد"),
+            new(ReportingPermissions.ReadModelRebuild, Code, "Rebuild the pre-aggregated report data", "إعادة بناء بيانات التقارير المجمعة", IsSensitive: true),
         ],
         Menu:
         [
-            new("reporting.sales", "Sales reports", "تقارير المبيعات", "/reports/sales", "reports", 10, ReportingPermissions.SalesRead),
-            new("reporting.purchasing", "Purchasing reports", "تقارير المشتريات", "/reports/purchasing", "reports", 20, ReportingPermissions.PurchasingRead),
-            new("reporting.inventory", "Inventory reports", "تقارير المخزون", "/reports/inventory", "reports", 30, ReportingPermissions.InventoryRead),
-            new("reporting.manufacturing", "Manufacturing reports", "تقارير التصنيع", "/reports/manufacturing", "reports", 40, ReportingPermissions.ManufacturingRead),
-            new("reporting.tax", "Tax reports", "تقارير الضرائب", "/reports/tax", "reports", 50, ReportingPermissions.TaxRead),
+            new("reporting.dashboards", "Dashboards", "لوحات المعلومات", "/dashboards", "overview", 1, ReportingPermissions.DashboardRead),
+            new("reporting.sales", "Sales reports", "تقارير المبيعات", "/reports/sales", "reports", 10, ReportingPermissions.SalesRead, "sales"),
+            new("reporting.purchasing", "Purchasing reports", "تقارير المشتريات", "/reports/purchasing", "reports", 20, ReportingPermissions.PurchasingRead, "procurement"),
+            new("reporting.inventory", "Inventory reports", "تقارير المخزون", "/reports/inventory", "reports", 30, ReportingPermissions.InventoryRead, "inventory"),
+            new("reporting.manufacturing", "Manufacturing reports", "تقارير التصنيع", "/reports/manufacturing", "reports", 40, ReportingPermissions.ManufacturingRead,
+                "manufacturing"),
+            new("reporting.tax", "Tax reports", "تقارير الضرائب", "/reports/tax", "reports", 50, ReportingPermissions.TaxRead, "accounting"),
+            new("reporting.schedules", "Scheduled reports", "التقارير المجدولة", "/reports/schedules", "reports", 60, ReportingPermissions.ScheduleManage),
         ]);
 
     public void AddServices(IServiceCollection services, IConfiguration configuration)
@@ -105,6 +116,16 @@ public sealed class ReportingModule : IErpModule
         services.AddScoped<IReportArea, PeopleReports>();
         services.AddScoped<ReportService>();
         services.AddScoped<DocumentPrinting>();
+        services.AddScoped<DashboardAccess>();
+        services.AddScoped<ReadModelReports>();
+        services.AddScoped<ReadModelProjector>();
+        services.AddScoped<IReportFileRenderer, ReportFileRenderer>();
+        services.AddScoped<ReportScheduleExecutor>();
+        var role = configuration["Erp:Role"] ?? "all";
+        if (role is "worker" or "all")
+        {
+            services.AddHostedService<ReportScheduleBackgroundService>();
+        }
         services.AddHandlersFromAssembly(typeof(IReportingDbContext).Assembly);
     }
 
@@ -122,6 +143,71 @@ public sealed class ReportingModule : IErpModule
         group.MapDelete("/views/{id:guid}", async (Guid id, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new DeleteSavedViewCommand(id), ct)).ToHttpResult(_ => Results.NoContent()))
             .RequirePermission(ReportingPermissions.ViewManage);
+
+        // ---- Dashboards (own or shared with one of my roles; widget data runs with the viewer's permissions) ----
+        group.MapGet("/dashboards", async (IDispatcher d, CancellationToken ct) => (await d.Send(new ListDashboardsQuery(), ct)).ToHttpResult())
+            .RequirePermission(ReportingPermissions.DashboardRead);
+        group.MapGet("/dashboards/{id:guid}", async (Guid id, IDispatcher d, CancellationToken ct) => (await d.Send(new GetDashboardQuery(id), ct)).ToHttpResult())
+            .RequirePermission(ReportingPermissions.DashboardRead);
+        group.MapPost("/dashboards", async (DashboardRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new SaveDashboardCommand(null, body.Name, body.Description, body.SharedWithRoleIds, body.Widgets ?? []), ct))
+                .ToHttpResult(x => Results.Created($"/api/v1/reports/dashboards/{x.Id}", x)))
+            .RequirePermission(ReportingPermissions.DashboardManage);
+        group.MapPut("/dashboards/{id:guid}", async (Guid id, DashboardRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new SaveDashboardCommand(id, body.Name, body.Description, body.SharedWithRoleIds, body.Widgets ?? []), ct)).ToHttpResult())
+            .RequirePermission(ReportingPermissions.DashboardManage);
+        group.MapDelete("/dashboards/{id:guid}", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new DeleteDashboardCommand(id), ct)).ToHttpResult(_ => Results.NoContent()))
+            .RequirePermission(ReportingPermissions.DashboardManage);
+        group.MapGet("/dashboards/{id:guid}/widgets/{widgetId:guid}/data", async (Guid id, Guid widgetId, string? lang, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new WidgetDataQuery(id, widgetId, lang), ct)).ToHttpResult())
+            .RequirePermission(ReportingPermissions.DashboardRead);
+
+        // ---- Scheduled reports (personal; run with the owner's permissions) ----
+        group.MapGet("/schedules", async (IDispatcher d, CancellationToken ct) => (await d.Send(new ListSchedulesQuery(), ct)).ToHttpResult())
+            .RequirePermission(ReportingPermissions.ScheduleManage);
+        group.MapPost("/schedules", async (ScheduleInput body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new CreateScheduleCommand(body), ct)).ToHttpResult(x => Results.Created($"/api/v1/reports/schedules/{x.Id}", x)))
+            .RequirePermission(ReportingPermissions.ScheduleManage);
+        group.MapPut("/schedules/{id:guid}", async (Guid id, ScheduleInput body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new UpdateScheduleCommand(id, body), ct)).ToHttpResult())
+            .RequirePermission(ReportingPermissions.ScheduleManage);
+        group.MapDelete("/schedules/{id:guid}", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new DeleteScheduleCommand(id), ct)).ToHttpResult(_ => Results.NoContent()))
+            .RequirePermission(ReportingPermissions.ScheduleManage);
+        group.MapGet("/schedules/{id:guid}/runs", async (Guid id, IDispatcher d, CancellationToken ct) => (await d.Send(new ListScheduleRunsQuery(id), ct)).ToHttpResult())
+            .RequirePermission(ReportingPermissions.ScheduleManage);
+        group.MapPost("/schedules/{id:guid}/run", async (Guid id, ICurrentUser user, IReportingDbContext db, ReportScheduleExecutor executor, CancellationToken ct) =>
+            {
+                // Run now: only the owner, through the same executor the worker uses.
+                if (!await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.AnyAsync(db.Schedules, s => s.Id == id && s.OwnerUserId == user.UserId, ct))
+                {
+                    return ReportingErrors.ScheduleNotFound.ToProblem();
+                }
+
+                return (await executor.RunAsync(id, ReportScheduleExecutor.ManualTrigger, ct)).ToHttpResult();
+            })
+            .RequirePermission(ReportingPermissions.ScheduleManage);
+        group.MapGet("/schedules/{id:guid}/runs/{runId:guid}/file", async (Guid id, Guid runId, IDispatcher d, CancellationToken ct) =>
+            {
+                var file = await d.Send(new GetScheduleRunFileQuery(id, runId), ct);
+                return file.IsSuccess ? Results.File(file.Value.Content, file.Value.ContentType, file.Value.FileName) : file.Error.ToProblem();
+            })
+            .RequirePermission(ReportingPermissions.ScheduleManage);
+
+        // ---- Read models ----
+        group.MapPost("/read-models/rebuild", async (RebuildReadModelsRequest body, ReadModelProjector projector, CancellationToken ct) =>
+            {
+                if (body.From > body.To || body.To.DayNumber - body.From.DayNumber > 3 * 366)
+                {
+                    return ReportingErrors.InvalidRange.ToProblem();
+                }
+
+                var sales = await projector.RefreshSalesAsync(body.From, body.To, ct);
+                var stock = await projector.RefreshStockSnapshotAsync(ct);
+                return Results.Ok(new RebuildReadModelsResult(body.From, body.To, sales, stock));
+            })
+            .RequirePermission(ReportingPermissions.ReadModelRebuild);
 
         group.MapGet("/documents/{documentType}/{id:guid}", async (
             string documentType, Guid id, string? lang, string? format, HttpContext http, DocumentPrinting printing, IPdfRenderer pdf, CancellationToken ct) =>

@@ -27,6 +27,7 @@ public sealed class SalesReports(IServiceProvider services, ReportLookups lookup
         Def("gross-profit", "Gross profit by document", "مجمل الربح حسب المستند", "Revenue − cost of goods sold per posted invoice and credit note.", CommonFilters),
         Def("by-salesperson", "Sales by salesperson", "المبيعات حسب مندوب المبيعات",
             "Net revenue, cost of sales and gross profit per salesperson (invoices, credit notes and POS receipts).", ["from", "to", "branchId", "salespersonId"]),
+        ReadModelReports.DailySales,
     ];
 
     public async Task<Result<ReportOutput>> RunAsync(string key, ReportQuery q, CancellationToken ct)
@@ -34,6 +35,11 @@ public sealed class SalesReports(IServiceProvider services, ReportLookups lookup
         if (key == "by-salesperson")
         {
             return new ReportOutput(await PeopleReports.SalesBySalespersonAsync(services, q, ct));
+        }
+
+        if (key == ReadModelReports.DailySales.Key)
+        {
+            return new ReportOutput(await services.GetRequiredService<ReadModelReports>().DailySalesAsync(q, ct));
         }
 
         var groupBy = (q.GroupBy ?? "month").ToLowerInvariant();

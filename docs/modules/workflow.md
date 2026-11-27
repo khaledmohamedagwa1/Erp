@@ -22,14 +22,15 @@ Approved (or back to Draft on rejection).
 
 ## Rules
 
-- **Definitions** (per company and document type): name, priority (lower first), active flag, **conditions** (all must hold)
-  and ordered **steps**.
+- **Definitions** (per company and document type): name, priority (lower first), active flag, **conditions** and ordered **steps**.
+- **Condition groups**: each condition has an optional `group` (0–100, default 0). Conditions in the same group must all hold
+  (all-of); the definition applies when **any** group holds (any-of). Without groups every condition is in group 0, i.e. plain
+  AND — existing definitions behave as before. Example: `(amount > 50,000 AND channel = export) OR amount ≥ 200,000` is two groups.
 - **Conditions**: fact `amount` (always compared in the company's **base currency** — other currencies are converted at
   today's spot rate via `IExchangeRateProvider`; a missing rate fails the submission with `workflow.exchange-rate-missing`
   rather than skipping approval), `branch`, or any numeric/text fact. Operators `GreaterThan`, `GreaterOrEqual`, `LessThan`,
   `LessOrEqual`, `Equal`, `In` (comma-separated list). A fact the request does not supply makes the condition false.
-- **Selection**: active definitions for the document type, ordered by priority, then name; the **first** whose conditions all
-  hold creates the instance.
+- **Selection**: active definitions for the document type, ordered by priority, then name; the **first** that matches creates the instance.
 - **Steps**: approver = `Role` (Identity role id) or `User`; `requiredApprovals` = quorum of **distinct** approvers;
   optional escalation after N hours to a role or user.
 - **Segregation of duties**: the requester can never approve or reject their own document — not directly, not under a
@@ -46,8 +47,11 @@ Approved (or back to Draft on rejection).
   While active, the delegate may decide whatever the delegator may decide; the action is recorded with `onBehalfOf`, and
   for the quorum it counts as the delegator's approval. Users delegate their own approvals; delegating for someone else needs
   `workflow.definition.manage`.
-- **Escalation**: a step that waits longer than its escalation time gets the escalation target added as an approver
-  (once per step). The worker (`Erp:Role` = `worker`/`all`) runs it every `Workflow:EscalationIntervalMinutes` (default 15)
+- **Escalation**: a step that waits longer than its escalation time is escalated once. The step's `escalationMode` decides how:
+  `AddApprover` (default) adds the escalation target as an extra approver; `Reassign` hands the step to the target alone — the
+  original approver(s), earlier ad-hoc delegates and their standing delegates can no longer decide (assigned approvers are kept
+  with `active = false` for the history); the target may delegate further. Approvals already given before escalation still count
+  towards the quorum. Only the active approvers are notified. The worker (`Erp:Role` = `worker`/`all`) runs it every `Workflow:EscalationIntervalMinutes` (default 15)
   for every active tenant; administrators can trigger it for their tenant with `POST escalations/run`.
 
 ## Notifications
@@ -61,7 +65,7 @@ the current step's approvers through `INotificationSender`, at most once per eve
 |---|---|---|
 | `GET /definitions?documentType=` | `workflow.definition.read` | |
 | `GET /definitions/{id}` | `workflow.definition.read` | Returns `ETag`. |
-| `POST /definitions` | `workflow.definition.manage` | `{documentType, name, priority, conditions[{fact, operator, value}], steps[{sequence, approverKind, approverId, requiredApprovals, escalateAfterHours?, escalateToKind?, escalateToId?}]}` |
+| `POST /definitions` | `workflow.definition.manage` | `{documentType, name, priority, conditions[{fact, operator, value, group?}], steps[{sequence, approverKind, approverId, requiredApprovals, escalateAfterHours?, escalateToKind?, escalateToId?, escalationMode?: AddApprover\|Reassign}]}` |
 | `PUT /definitions/{id}` | `workflow.definition.manage` | Same body (document type cannot change); `If-Match` required (428/412). |
 | `POST /definitions/{id}/activate`, `/deactivate` | `workflow.definition.manage` | |
 | `DELETE /definitions/{id}` | `workflow.definition.manage` | Running instances are unaffected. |
@@ -83,6 +87,6 @@ the current step's approvers through `INotificationSender`, at most once per eve
 
 ## Limitations
 
-- Conditions are AND-only; OR is expressed with several definitions.
+- Conditions are one level of OR-of-ANDs (groups); no nested expressions or NOT.
 - Amount conversion uses the spot rate of the submission date.
-- Escalation adds an approver; it does not reassign or auto-approve.
+- Escalation happens once per step (no multi-level chains) and never auto-approves.

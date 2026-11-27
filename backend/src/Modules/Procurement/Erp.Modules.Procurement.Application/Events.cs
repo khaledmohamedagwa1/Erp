@@ -114,3 +114,17 @@ public sealed class ProcurementQueries(IProcurementDbContext db, ProductLookup p
         }).ToList();
     }
 }
+
+public sealed class PurchaseInvoiceQueries(IProcurementDbContext db) : IPurchaseInvoiceQueries
+{
+    public async Task<PurchaseInvoiceSummary?> GetPurchaseInvoiceAsync(Guid invoiceId, CancellationToken cancellationToken = default)
+    {
+        var invoice = await db.Invoices.AsNoTracking().FirstOrDefaultAsync(i => i.Id == invoiceId, cancellationToken);
+        return invoice is null
+            ? null
+            : new PurchaseInvoiceSummary(invoice.Id, invoice.LegalEntityId, invoice.SupplierId, invoice.Number, invoice.SupplierInvoiceNumber, invoice.InvoiceDate,
+                invoice.IsPosted,
+                invoice.Lines.Select(l => new PurchaseInvoiceLineSummary(l.LineId, l.Kind.ToString(), l.AccountId, l.ProductId, l.Description, l.Quantity,
+                    invoice.IsPosted ? l.BaseNet : 0)).ToList());
+    }
+}

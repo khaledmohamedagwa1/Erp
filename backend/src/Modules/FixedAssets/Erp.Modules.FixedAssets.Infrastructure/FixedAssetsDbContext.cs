@@ -25,12 +25,19 @@ public sealed class FixedAssetsDbContext(DbContextOptions<FixedAssetsDbContext> 
 
     public DbSet<DepreciationRun> DepreciationRuns => Set<DepreciationRun>();
 
+    public DbSet<DepreciationBook> Books => Set<DepreciationBook>();
+
+    public DbSet<AssetSettings> Settings => Set<AssetSettings>();
+
     protected override void ConfigureModel(ModelBuilder modelBuilder)
     {
         // Schedule, history and run lines are JSON columns, never entity types.
         modelBuilder.Ignore<ScheduleLine>();
         modelBuilder.Ignore<AssetEvent>();
         modelBuilder.Ignore<DepreciationRunLine>();
+        modelBuilder.Ignore<AssetBook>();
+        modelBuilder.Ignore<BookLine>();
+        modelBuilder.Ignore<BookAdjustment>();
 
         modelBuilder.Entity<AssetCategory>(b =>
         {
@@ -59,7 +66,11 @@ public sealed class FixedAssetsDbContext(DbContextOptions<FixedAssetsDbContext> 
             b.Property(x => x.AcquisitionMode).HasConversion<string>().HasMaxLength(30);
             b.Property(x => x.PostingGroup).HasMaxLength(30);
             b.Property(x => x.SourceDocType).HasMaxLength(60);
-            foreach (var money in new[] { nameof(Asset.AcquisitionCost), nameof(Asset.Cost), nameof(Asset.SalvageValue), nameof(Asset.AccumulatedDepreciation) })
+            foreach (var money in new[]
+                     {
+                         nameof(Asset.AcquisitionCost), nameof(Asset.Cost), nameof(Asset.SalvageValue), nameof(Asset.AccumulatedDepreciation),
+                         nameof(Asset.RevaluationReserve), nameof(Asset.RevaluationLossInProfit),
+                     })
             {
                 b.Property<decimal>(money).HasPrecision(19, 4);
             }
@@ -68,13 +79,34 @@ public sealed class FixedAssetsDbContext(DbContextOptions<FixedAssetsDbContext> 
             b.Property(x => x.DisposalGainLoss).HasPrecision(19, 4);
             b.Property(x => x.DecliningRatePercent).HasPrecision(9, 6);
             b.Property(x => x.TotalUnits).HasPrecision(18, 6);
+            b.Property(x => x.Quantity).HasPrecision(18, 6).HasDefaultValue(1m);
             b.Ignore(x => x.NetBookValue);
             b.Ignore(x => x.FirstDepreciationMonth);
             JsonList(b.Property(x => x.Schedule));
             JsonList(b.Property(x => x.History));
+            JsonList(b.Property(x => x.Books)).HasDefaultValueSql("N'[]'");
             b.HasIndex(TenantIdProperty, nameof(Asset.CompanyId), nameof(Asset.Number)).IsUnique().HasFilter("[Number] IS NOT NULL");
             b.HasIndex(TenantIdProperty, nameof(Asset.LegalEntityId), nameof(Asset.Status));
             b.HasOne<AssetCategory>().WithMany().HasForeignKey(x => x.CategoryId).OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<DepreciationBook>(b =>
+        {
+            b.ToTable("DepreciationBook");
+            Key(b);
+            b.Property(x => x.Code).HasMaxLength(30).IsRequired();
+            b.Property(x => x.NameEn).HasMaxLength(200).IsRequired();
+            b.Property(x => x.NameAr).HasMaxLength(200).IsRequired();
+            b.HasIndex(TenantIdProperty, nameof(DepreciationBook.CompanyId), nameof(DepreciationBook.Code)).IsUnique();
+        });
+
+        modelBuilder.Entity<AssetSettings>(b =>
+        {
+            b.ToTable("AssetSettings");
+            Key(b);
+            b.Property(x => x.LastRunSummary).HasMaxLength(2000);
+            b.Property(x => x.LastRunAtUtc).HasPrecision(3);
+            b.HasIndex(TenantIdProperty, nameof(AssetSettings.CompanyId)).IsUnique();
         });
 
         modelBuilder.Entity<DepreciationRun>(b =>
@@ -98,9 +130,9 @@ public sealed class FixedAssetsDbContext(DbContextOptions<FixedAssetsDbContext> 
     }
 
     /// <summary>Child collections are JSON columns; the comparer snapshots a deep copy so in-place edits are detected.</summary>
-    private static void JsonList<TItem>(PropertyBuilder<List<TItem>> property)
+    private static PropertyBuilder<List<TItem>> JsonList<TItem>(PropertyBuilder<List<TItem>> property)
     {
-        property.HasConversion(
+        return property.HasConversion(
                 v => JsonSerializer.Serialize(v, Json),
                 v => JsonSerializer.Deserialize<List<TItem>>(v, Json) ?? new List<TItem>(),
                 new ValueComparer<List<TItem>>(

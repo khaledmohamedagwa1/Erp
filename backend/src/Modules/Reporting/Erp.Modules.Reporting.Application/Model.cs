@@ -109,6 +109,22 @@ public static class ReportingErrors
 
     public static readonly Error ViewNotFound = Error.NotFound("reporting.view-not-found", "The saved view does not exist.");
 
+    public static readonly Error LinkReport = Error.Validation("reporting.link-report",
+        "This catalogue entry links to another module's report and cannot be used in dashboards or schedules.");
+
+    public static readonly Error DashboardNotFound = Error.NotFound("reporting.dashboard-not-found", "The dashboard does not exist.");
+
+    public static readonly Error WidgetNotFound = Error.NotFound("reporting.widget-not-found", "The widget does not exist on this dashboard.");
+
+    public static readonly Error NotOwner = Error.Forbidden("reporting.not-owner", "Only the owner can change this.");
+
+    public static readonly Error ScheduleNotFound = Error.NotFound("reporting.schedule-not-found", "The report schedule does not exist.");
+
+    public static readonly Error RunNotFound = Error.NotFound("reporting.schedule-run-not-found", "The run does not exist or has no output.");
+
+    public static Error InvalidParameter(string name, string reason) =>
+        Error.Validation("reporting.parameter-invalid", $"Parameter '{name}': {reason}");
+
     public static readonly Error CompanyRequired = Error.Validation("company.required", "This endpoint requires the X-Company-Id header.");
 
     public static Error Forbidden(string permission) => Error.Forbidden("forbidden", $"Missing permission '{permission}'.");
@@ -124,4 +140,7 @@ public sealed class ReportingOptions
 
     /// <summary>Maximum number of rows in a CSV/Excel/HTML export.</summary>
     public int MaxExportRows { get; set; } = 50_000;
+
+    /// <summary>How often the worker looks for due report schedules.</summary>
+    public int ScheduleIntervalMinutes { get; set; } = 5;
 }

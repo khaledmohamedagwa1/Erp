@@ -28,6 +28,16 @@ public enum ApproverKind
     User = 2,
 }
 
+/// <summary>What happens when a step is escalated.</summary>
+public enum EscalationMode
+{
+    /// <summary>The escalation target becomes an additional approver; the original approvers can still decide.</summary>
+    AddApprover = 1,
+
+    /// <summary>The step is reassigned: only the escalation target (and whoever it delegates to) can decide from then on.</summary>
+    Reassign = 2,
+}
+
 public enum ConditionOperator
 {
     GreaterThan = 1,
@@ -49,6 +59,8 @@ public sealed record ApprovalFacts(
 /// One condition. <see cref="Fact"/> is "amount", "branch", or the name of a numeric/text fact supplied by the module
 /// (e.g. "discountPercent"). For <see cref="ConditionOperator.In"/> the value is a comma-separated list.
 /// A fact that is not present makes the condition false.
+/// <see cref="Group"/> builds OR logic: conditions in the same group must all hold (all-of), and the definition applies when
+/// any group holds (any-of). Conditions without a group form group 0, so a definition without groups keeps plain AND logic.
 /// </summary>
 public sealed class ApprovalCondition
 {
@@ -59,8 +71,14 @@ public sealed class ApprovalCondition
     {
     }
 
-    public ApprovalCondition(string fact, ConditionOperator op, string value)
+    public ApprovalCondition(string fact, ConditionOperator op, string value, int? group = null)
     {
+        if (group is < 0 or > 100)
+        {
+            throw new DomainException(WorkflowErrors.InvalidCondition with { Message = "Condition group must be between 0 and 100." });
+        }
+
+        Group = group is null or 0 ? null : group;
         Fact = Guard.MaxLength(Guard.NotEmpty(fact, "workflow.condition-invalid", "Fact"), 100, "workflow.condition-invalid", "Fact");
         Operator = op;
         Value = Guard.MaxLength(Guard.NotEmpty(value, "workflow.condition-invalid", "Value"), 500, "workflow.condition-invalid", "Value");
@@ -75,6 +93,11 @@ public sealed class ApprovalCondition
     public ConditionOperator Operator { get; private set; }
 
     public string Value { get; private set; } = string.Empty;
+
+    /// <summary>OR group (null = group 0).</summary>
+    public int? Group { get; private set; }
+
+    public int GroupKey => Group ?? 0;
 
     public bool IsSatisfiedBy(ApprovalFacts facts)
     {
@@ -140,7 +163,7 @@ public sealed class ApprovalStep
     }
 
     public ApprovalStep(int sequence, ApproverKind approverKind, Guid approverId, int requiredApprovals, int? escalateAfterHours = null,
-        ApproverKind? escalateToKind = null, Guid? escalateToId = null)
+        ApproverKind? escalateToKind = null, Guid? escalateToId = null, EscalationMode? escalationMode = null)
     {
         if (approverId == Guid.Empty || requiredApprovals < 1 || requiredApprovals > 20 || escalateAfterHours is < 1 ||
             (escalateAfterHours is not null && (escalateToKind is null || escalateToId is null || escalateToId == Guid.Empty)))
@@ -155,6 +178,7 @@ public sealed class ApprovalStep
         EscalateAfterHours = escalateAfterHours;
         EscalateToKind = escalateAfterHours is null ? null : escalateToKind;
         EscalateToId = escalateAfterHours is null ? null : escalateToId;
+        EscalationMode = escalateAfterHours is null || escalationMode is null or Domain.EscalationMode.AddApprover ? null : escalationMode;
     }
 
     public int Sequence { get; private set; }
@@ -162,6 +186,9 @@ public sealed class ApprovalStep
     public ApproverKind ApproverKind { get; private set; }
 
     public Guid ApproverId { get; private set; }
+
+    /// <summary>Null = <see cref="Domain.EscalationMode.AddApprover"/> (the behaviour before the option existed).</summary>
+    public EscalationMode? EscalationMode { get; private set; }
 
     /// <summary>Quorum: distinct approvers needed before the step completes.</summary>
     public int RequiredApprovals { get; private set; }
@@ -203,7 +230,7 @@ public sealed class ApprovalDefinition : AggregateRoot, ICompanyScoped
     /// <summary>Lower numbers are evaluated first; the first matching definition wins.</summary>
     public int Priority { get; private set; }
 
-    /// <summary>All conditions must hold (AND). No conditions = always applies.</summary>
+    /// <summary>Any condition group must hold, with every condition of that group (see <see cref="ApprovalCondition.Group"/>). No conditions = always applies.</summary>
     public IReadOnlyList<ApprovalCondition> Conditions => _conditions.AsReadOnly();
 
     public IReadOnlyList<ApprovalStep> Steps => _steps.OrderBy(s => s.Sequence).ToList();
@@ -237,7 +264,7 @@ public sealed class ApprovalDefinition : AggregateRoot, ICompanyScoped
         for (var i = 0; i < ordered.Count; i++)
         {
             var s = ordered[i];
-            _steps.Add(new ApprovalStep(i + 1, s.ApproverKind, s.ApproverId, s.RequiredApprovals, s.EscalateAfterHours, s.EscalateToKind, s.EscalateToId));
+            _steps.Add(new ApprovalStep(i + 1, s.ApproverKind, s.ApproverId, s.RequiredApprovals, s.EscalateAfterHours, s.EscalateToKind, s.EscalateToId, s.EscalationMode));
         }
     }
 
@@ -245,7 +272,8 @@ public sealed class ApprovalDefinition : AggregateRoot, ICompanyScoped
 
     public void Deactivate() => IsActive = false;
 
-    public bool Matches(ApprovalFacts facts) => IsActive && _conditions.All(c => c.IsSatisfiedBy(facts));
+    public bool Matches(ApprovalFacts facts) =>
+        IsActive && (_conditions.Count == 0 || _conditions.GroupBy(c => c.GroupKey).Any(group => group.All(c => c.IsSatisfiedBy(facts))));
 
     /// <summary>The first active definition (by priority, then name) whose conditions all hold.</summary>
     public static ApprovalDefinition? SelectFor(IEnumerable<ApprovalDefinition> candidates, string documentType, ApprovalFacts facts) =>
@@ -290,6 +318,7 @@ public sealed class InstanceStep
         EscalateAfterHours = step.EscalateAfterHours;
         EscalateToKind = step.EscalateToKind;
         EscalateToId = step.EscalateToId;
+        EscalationMode = step.EscalationMode;
     }
 
     public int Sequence { get; private set; }
@@ -306,7 +335,12 @@ public sealed class InstanceStep
 
     public Guid? EscalateToId { get; private set; }
 
+    public EscalationMode? EscalationMode { get; private set; }
+
     public bool Escalated { get; internal set; }
+
+    /// <summary>True once a <see cref="Domain.EscalationMode.Reassign"/> escalation took the step away from its original approvers.</summary>
+    public bool IsReassigned => Escalated && EscalationMode == Domain.EscalationMode.Reassign;
 }
 
 /// <summary>An extra approver added to a step by delegation or escalation.</summary>
@@ -331,6 +365,11 @@ public sealed class AssignedApprover
     public Guid ApproverId { get; private set; }
 
     public ApprovalActionKind Source { get; private set; }
+
+    /// <summary>Set when a reassigning escalation removed this approver from the step (null = still assigned).</summary>
+    public bool? Superseded { get; internal set; }
+
+    public bool IsActive => Superseded != true;
 }
 
 public sealed class ApprovalAction
@@ -472,8 +511,8 @@ public sealed class ApprovalInstance : AggregateRoot, ICompanyScoped
         }
 
         var step = Current;
-        return Matches(step.ApproverKind, step.ApproverId, userId, roleIds) ||
-               _assigned.Any(a => a.StepSequence == CurrentStep && Matches(a.Kind, a.ApproverId, userId, roleIds));
+        return (!step.IsReassigned && Matches(step.ApproverKind, step.ApproverId, userId, roleIds)) ||
+               _assigned.Any(a => a.StepSequence == CurrentStep && a.IsActive && Matches(a.Kind, a.ApproverId, userId, roleIds));
     }
 
     private static bool Matches(ApproverKind kind, Guid approverId, Guid userId, IReadOnlyCollection<Guid> roleIds) =>
@@ -568,7 +607,11 @@ public sealed class ApprovalInstance : AggregateRoot, ICompanyScoped
         Status == ApprovalStatus.Pending && Current is { EscalateAfterHours: { } hours, Escalated: false } &&
         nowUtc - StepStartedAtUtc >= TimeSpan.FromHours(hours);
 
-    /// <summary>Adds the step's escalation target as an approver of the current step. Returns false when not due.</summary>
+    /// <summary>
+    /// Adds the step's escalation target as an approver of the current step or, with <see cref="EscalationMode.Reassign"/>, hands the step
+    /// to the target alone (the original and previously assigned approvers can no longer decide). Approvals already given still count
+    /// towards the quorum. Returns false when not due.
+    /// </summary>
     public bool Escalate(DateTime nowUtc)
     {
         if (!IsEscalationDue(nowUtc))
@@ -578,8 +621,16 @@ public sealed class ApprovalInstance : AggregateRoot, ICompanyScoped
 
         var step = Current;
         step.Escalated = true;
+        if (step.IsReassigned)
+        {
+            foreach (var assigned in _assigned.Where(a => a.StepSequence == CurrentStep))
+            {
+                assigned.Superseded = true;
+            }
+        }
+
         _assigned.Add(new AssignedApprover(CurrentStep, step.EscalateToKind!.Value, step.EscalateToId!.Value, ApprovalActionKind.Escalated));
-        _actions.Add(new ApprovalAction(ApprovalActionKind.Escalated, CurrentStep, null, null, step.EscalateToId, $"No decision after {step.EscalateAfterHours} h", nowUtc));
+        _actions.Add(new ApprovalAction(ApprovalActionKind.Escalated, CurrentStep, null, null, step.EscalateToId, step.IsReassigned ? $"Reassigned: no decision after {step.EscalateAfterHours} h" : $"No decision after {step.EscalateAfterHours} h", nowUtc));
         Raise(new ApprovalStepAssigned(Id, CompanyId, DocumentType, DocumentNumber, CurrentStep));
         return true;
     }

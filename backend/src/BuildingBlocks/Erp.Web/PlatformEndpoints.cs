@@ -57,6 +57,7 @@ public static class PlatformEndpoints
                     .Where(m => m.Manifest.IsCore || (enabled?.Contains(m.Manifest.Code) ?? false))
                     .SelectMany(m => m.Manifest.Menu)
                     .Where(i => i.RequiredPermission is null || granted.Contains(i.RequiredPermission))
+                    .Where(i => i.RequiredModule is null || (enabled?.Contains(i.RequiredModule) ?? false))
                     .GroupBy(i => i.Group)
                     .Select(g => new NavigationGroupDto(g.Key, g.OrderBy(i => i.Order)
                         .Select(i => new NavigationItemDto(i.Key, i.LabelEn, i.LabelAr, i.Route, i.Order)).ToList()))

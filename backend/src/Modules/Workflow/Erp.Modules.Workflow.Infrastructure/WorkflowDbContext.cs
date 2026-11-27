@@ -38,12 +38,14 @@ public sealed class WorkflowDbContext(DbContextOptions<WorkflowDbContext> option
             {
                 c.ToJson("Conditions");
                 c.Property(x => x.Operator).HasConversion<string>();
+                c.Ignore(x => x.GroupKey);
             });
             b.OwnsMany(x => x.Steps, s =>
             {
                 s.ToJson("Steps");
                 s.Property(x => x.ApproverKind).HasConversion<string>();
                 s.Property(x => x.EscalateToKind).HasConversion<string>();
+                s.Property(x => x.EscalationMode).HasConversion<string>();
             });
             b.Navigation(x => x.Conditions).UsePropertyAccessMode(PropertyAccessMode.Field).HasField("_conditions");
             b.Navigation(x => x.Steps).UsePropertyAccessMode(PropertyAccessMode.Field).HasField("_steps");
@@ -77,12 +79,15 @@ public sealed class WorkflowDbContext(DbContextOptions<WorkflowDbContext> option
                 s.ToJson("Steps");
                 s.Property(x => x.ApproverKind).HasConversion<string>();
                 s.Property(x => x.EscalateToKind).HasConversion<string>();
+                s.Property(x => x.EscalationMode).HasConversion<string>();
+                s.Ignore(x => x.IsReassigned);
             });
             b.OwnsMany(x => x.AssignedApprovers, a =>
             {
                 a.ToJson("AssignedApprovers");
                 a.Property(x => x.Kind).HasConversion<string>();
                 a.Property(x => x.Source).HasConversion<string>();
+                a.Ignore(x => x.IsActive);
             });
             b.OwnsMany(x => x.Actions, a =>
             {

@@ -19,11 +19,13 @@ public sealed record AssetDto(Guid Id, string? Number, string NameEn, string Nam
     Guid? CustodianId, DateOnly AcquisitionDate, DateOnly InServiceDate, decimal AcquisitionCost, decimal Cost, decimal SalvageValue, int UsefulLifeMonths,
     string Method, decimal? DecliningRatePercent, decimal? TotalUnits, string Status, decimal AccumulatedDepreciation, decimal NetBookValue,
     string? AcquisitionMode, Guid? AcquisitionJournalId, string? SourceDocType, Guid? SourceDocId, Guid? SourceLineId,
-    DateOnly? DisposalDate, decimal? DisposalProceeds, decimal? DisposalGainLoss, Guid? DisposalJournalId);
+    DateOnly? DisposalDate, decimal? DisposalProceeds, decimal? DisposalGainLoss, Guid? DisposalJournalId, decimal Quantity, decimal RevaluationReserve,
+    decimal RevaluationLossInProfit);
 
 public sealed record ScheduleLineDto(DateOnly Period, decimal Amount, decimal Cumulative, decimal NetBookValue, decimal? Units, bool Posted, Guid? RunId);
 
-public sealed record AssetEventDto(DateTime AtUtc, DateOnly Date, string Kind, string Description, decimal? Amount, Guid? JournalId, Guid? ReferenceId);
+public sealed record AssetEventDto(DateTime AtUtc, DateOnly Date, string Kind, string Description, decimal? Amount, Guid? JournalId, Guid? ReferenceId,
+    decimal CostDelta, decimal? AccumulatedDelta, decimal? ReserveDelta);
 
 public sealed record RunLineDto(Guid AssetId, string AssetNumber, Guid CategoryId, string? PostingGroup, decimal Amount);
 
@@ -48,7 +50,7 @@ internal static class AssetMapping
     public static AssetDto ToDto(Asset a) => new(a.Id, a.Number, a.NameEn, a.NameAr, a.CategoryId, a.LegalEntityId, a.BranchId, a.Location, a.CustodianId,
         a.AcquisitionDate, a.InServiceDate, a.AcquisitionCost, a.Cost, a.SalvageValue, a.UsefulLifeMonths, a.Method.ToString(), a.DecliningRatePercent, a.TotalUnits,
         a.Status.ToString(), a.AccumulatedDepreciation, a.NetBookValue, a.AcquisitionMode?.ToString(), a.AcquisitionJournalId, a.SourceDocType, a.SourceDocId,
-        a.SourceLineId, a.DisposalDate, a.DisposalProceeds, a.DisposalGainLoss, a.DisposalJournalId);
+        a.SourceLineId, a.DisposalDate, a.DisposalProceeds, a.DisposalGainLoss, a.DisposalJournalId, a.Quantity, a.RevaluationReserve, a.RevaluationLossInProfit);
 
     public static RunDto ToDto(DepreciationRun r, bool alreadyPosted = false) => new(r.Id, r.LegalEntityId, r.Period, r.Status.ToString(), r.Total, r.JournalId,
         r.ReversalDate, r.ReversalJournalId, r.Lines.Select(l => new RunLineDto(l.AssetId, l.AssetNumber, l.CategoryId, l.PostingGroup, l.Amount)).ToList(), alreadyPosted);
@@ -139,7 +141,7 @@ public sealed class ListCategoriesHandler(IFixedAssetsDbContext db) : IQueryHand
 // ======================= Assets (drafts) =======================
 public sealed record AssetInput(string NameEn, string NameAr, Guid CategoryId, Guid LegalEntityId, Guid? BranchId, string? Location, Guid? CustodianId,
     DateOnly AcquisitionDate, DateOnly InServiceDate, decimal AcquisitionCost, decimal? SalvageValue, int? UsefulLifeMonths, string? Method,
-    decimal? DecliningRatePercent, decimal? TotalUnits);
+    decimal? DecliningRatePercent, decimal? TotalUnits, decimal? Quantity = null);
 
 public sealed record CreateAssetCommand(AssetInput Asset) : ICommand<AssetDto>;
 
@@ -188,7 +190,7 @@ public sealed class CreateAssetHandler(IFixedAssetsDbContext db, ITenantContext 
 
         var asset = Asset.CreateDraft(tenant.CompanyId!.Value, category, input.LegalEntityId, input.NameEn, input.NameAr, input.BranchId, input.Location,
             input.CustodianId, input.AcquisitionDate, input.InServiceDate, input.AcquisitionCost, input.SalvageValue, input.UsefulLifeMonths,
-            AssetMapping.Method(input.Method), input.DecliningRatePercent, input.TotalUnits);
+            AssetMapping.Method(input.Method), input.DecliningRatePercent, input.TotalUnits, input.Quantity);
         db.Assets.Add(asset);
         await db.SaveChangesAsync(cancellationToken);
         return AssetMapping.ToDto(asset);
@@ -224,7 +226,7 @@ public sealed class UpdateAssetHandler(IFixedAssetsDbContext db, AssetScope scop
         }
 
         asset.Update(category, input.NameEn, input.NameAr, input.BranchId, input.Location, input.CustodianId, input.AcquisitionDate, input.InServiceDate,
-            input.AcquisitionCost, input.SalvageValue, input.UsefulLifeMonths, AssetMapping.Method(input.Method), input.DecliningRatePercent, input.TotalUnits);
+            input.AcquisitionCost, input.SalvageValue, input.UsefulLifeMonths, AssetMapping.Method(input.Method), input.DecliningRatePercent, input.TotalUnits, input.Quantity);
         await db.SaveChangesAsync(cancellationToken);
         return AssetMapping.ToDto(asset);
     }
@@ -333,7 +335,10 @@ public sealed class GetHistoryHandler(IFixedAssetsDbContext db) : IQueryHandler<
         var asset = await db.Assets.AsNoTracking().FirstOrDefaultAsync(a => a.Id == query.Id, cancellationToken);
         return asset is null
             ? FixedAssetsAppErrors.AssetNotFound
-            : asset.History.OrderBy(h => h.AtUtc).Select(h => new AssetEventDto(h.AtUtc, h.Date, h.Kind, h.Description, h.Amount, h.JournalId, h.ReferenceId)).ToList();
+            : asset.History.OrderBy(h => h.AtUtc)
+                .Select(h => new AssetEventDto(h.AtUtc, h.Date, h.Kind, h.Description, h.Amount, h.JournalId, h.ReferenceId, AssetEventKinds.CostEffect(h),
+                    h.AccumulatedDelta, h.ReserveDelta))
+                .ToList();
     }
 }
 
@@ -352,6 +357,7 @@ public sealed class ActivateAssetHandler(
     AssetScope scope,
     IJournalPostingService journals,
     IDocumentNumberGenerator numbers,
+    InvoiceLinkValidator invoiceLinks,
     IClock clock) : ICommandHandler<ActivateAssetCommand, AssetDto>
 {
     public async Task<Result<AssetDto>> Handle(ActivateAssetCommand command, CancellationToken cancellationToken)
@@ -404,6 +410,14 @@ public sealed class ActivateAssetHandler(
         {
             return FixedAssetsAppErrors.SourceRequired;
         }
+        else
+        {
+            var link = await invoiceLinks.ValidateAsync(asset, command.SourceDocType, command.SourceDocId.Value, command.SourceLineId, cancellationToken);
+            if (link.IsFailure)
+            {
+                return link.Error;
+            }
+        }
 
         var number = await numbers.NextAsync(new NumberScope(asset.CompanyId, "FixedAsset", "FA"), cancellationToken);
         asset.Activate(number, mode, journalId, mode == AcquisitionMode.PurchaseInvoice ? command.SourceDocType!.Trim() : null,
@@ -455,10 +469,12 @@ public sealed class RecordUsageHandler(IFixedAssetsDbContext db, IClock clock) :
 }
 
 /// <summary>
-/// Revalues the net book value. The difference is posted against the chosen account (normally a revaluation reserve in equity,
-/// or an expense account for an impairment): increase Dr FixedAssetCost / Cr account, decrease the opposite.
+/// Revalues the net book value. Without <see cref="ReserveAccountId"/> the IAS 16 model applies (posting roles): an increase first reverses
+/// earlier decreases recognised in profit or loss (Cr ImpairmentLoss), the rest goes to AssetRevaluationReserve; a decrease first uses up the
+/// asset's reserve, the rest is an expense (Dr ImpairmentLoss). With an explicit account the whole difference goes to that account and no
+/// reserve is tracked (the behaviour before IAS 16 support).
 /// </summary>
-public sealed record RevalueAssetCommand(Guid Id, DateOnly Date, decimal NewNetBookValue, Guid ReserveAccountId, int? NewUsefulLifeMonths) : ICommand<AssetDto>;
+public sealed record RevalueAssetCommand(Guid Id, DateOnly Date, decimal NewNetBookValue, Guid? ReserveAccountId, int? NewUsefulLifeMonths) : ICommand<AssetDto>;
 
 public sealed class RevalueAssetHandler(IFixedAssetsDbContext db, AssetScope scope, IJournalPostingService journals, IClock clock)
     : ICommandHandler<RevalueAssetCommand, AssetDto>
@@ -477,22 +493,33 @@ public sealed class RevalueAssetHandler(IFixedAssetsDbContext db, AssetScope sco
             return le.Error;
         }
 
-        var valid = await scope.ValidateAccountAsync(command.ReserveAccountId, cancellationToken);
-        if (valid.IsFailure)
-        {
-            return valid.Error;
-        }
-
-        var delta = asset.ValidateRevaluation(command.NewNetBookValue, command.NewUsefulLifeMonths);
+        ValueChangePlan? plan = null;
+        decimal delta;
         var eventId = SequentialGuid.New();
         var journal = new AssetJournal();
-        if (delta > 0)
+        if (command.ReserveAccountId is { } reserveAccount)
         {
-            journal.Debit(PostingRoles.FixedAssetCost, null, delta, asset.PostingGroup, asset.Number).Credit(null, command.ReserveAccountId, delta, description: asset.Number);
+            var valid = await scope.ValidateAccountAsync(reserveAccount, cancellationToken);
+            if (valid.IsFailure)
+            {
+                return valid.Error;
+            }
+
+            delta = asset.ValidateRevaluation(command.NewNetBookValue, command.NewUsefulLifeMonths);
+            if (delta > 0)
+            {
+                journal.Debit(PostingRoles.FixedAssetCost, null, delta, asset.PostingGroup, asset.Number).Credit(null, reserveAccount, delta, description: asset.Number);
+            }
+            else
+            {
+                journal.Debit(null, reserveAccount, -delta, description: asset.Number).Credit(PostingRoles.FixedAssetCost, null, -delta, asset.PostingGroup, asset.Number);
+            }
         }
         else
         {
-            journal.Debit(null, command.ReserveAccountId, -delta, description: asset.Number).Credit(PostingRoles.FixedAssetCost, null, -delta, asset.PostingGroup, asset.Number);
+            plan = asset.PlanValueChange(command.NewNetBookValue, command.NewUsefulLifeMonths);
+            delta = plan.Delta;
+            ValueChangeJournal.Add(journal, asset, plan);
         }
 
         Guid journalId = Guid.Empty;
@@ -508,7 +535,7 @@ public sealed class RevalueAssetHandler(IFixedAssetsDbContext db, AssetScope sco
             journalId = posted.Value.JournalId;
         }
 
-        asset.Revalue(command.Date, command.NewNetBookValue, command.NewUsefulLifeMonths, journalId, eventId, clock.UtcNow);
+        asset.Revalue(command.Date, command.NewNetBookValue, command.NewUsefulLifeMonths, journalId, eventId, clock.UtcNow, plan);
         await db.SaveChangesAsync(cancellationToken);
         return AssetMapping.ToDto(asset);
     }
@@ -567,6 +594,7 @@ public sealed class DisposeAssetHandler(IFixedAssetsDbContext db, AssetScope sco
             journal.Debit(PostingRoles.AssetDisposalGainLoss, null, -gainLoss, asset.PostingGroup, "Loss on disposal");
         }
 
+        ValueChangeJournal.TransferReserve(journal, asset, asset.RevaluationReserve);
         var posted = await journals.PostAsync(new JournalRequest(asset.LegalEntityId, command.Date, SourceModules.FixedAssets, FixedAssetDocumentTypes.Disposal,
             asset.Id, "dispose", $"Disposal of asset {asset.Number}", le.Value.FunctionalCurrency, 1m, journal.Lines), cancellationToken);
         if (posted.IsFailure)
@@ -710,6 +738,11 @@ public sealed class ReverseRunHandler(IFixedAssetsDbContext db, AssetScope scope
             return AssetErrors.Disposed;
         }
 
+        if (assets.Any(a => a.History.Any(h => h.Kind == AssetEventKinds.PartiallyDisposed && h.Date >= run.Period)))
+        {
+            return FixedAssetsAppErrors.PartiallyDisposed;
+        }
+
         var date = command.Date ?? AssetMath.MonthEnd(run.Period);
         var reversed = await journals.ReverseAsync(run.LegalEntityId, FixedAssetDocumentTypes.DepreciationRun, run.Id, "post", date, cancellationToken);
         if (reversed.IsFailure)
@@ -748,8 +781,9 @@ public sealed class ListRunsHandler(IFixedAssetsDbContext db) : IQueryHandler<Li
 
 // ======================= Register =======================
 /// <summary>
-/// Asset register as of a date: cost (acquisition cost + revaluations dated on or before), accumulated depreciation
-/// (schedule lines of posted runs whose journal date is on or before) and NBV. Assets disposed on or before the date and drafts are excluded.
+/// Asset register as of a date: cost (acquisition, revaluations, impairments, transfers and partial disposals dated on or before),
+/// accumulated depreciation (schedule lines of posted runs whose journal date is on or before, plus carried/removed amounts of transfers and
+/// partial disposals) and NBV. Assets disposed or transferred out on or before the date and drafts are excluded.
 /// </summary>
 public sealed record RegisterQuery(Guid LegalEntityId, DateOnly AsOf) : IQuery<RegisterDto>;
 
@@ -765,13 +799,7 @@ public sealed class RegisterHandler(IFixedAssetsDbContext db, AssetScope scope) 
 
         var categories = await db.Categories.AsNoTracking().ToDictionaryAsync(c => c.Id, c => c.Code, cancellationToken);
 
-        // A schedule line counts once its run's journal (dated the run period's last day) is on or before the date, so a
-        // catch-up run lands where the ledger has it.
-        var runEnds = (await db.DepreciationRuns.AsNoTracking()
-                .Where(r => r.LegalEntityId == query.LegalEntityId && r.Status == DepreciationRunStatus.Posted)
-                .Select(r => new { r.Id, r.Period })
-                .ToListAsync(cancellationToken))
-            .ToDictionary(r => r.Id, r => AssetMath.MonthEnd(r.Period));
+        var runEnds = await RegisterMath.RunEndsAsync(db, query.LegalEntityId, cancellationToken);
         var assets = await db.Assets.AsNoTracking()
             .Where(a => a.LegalEntityId == query.LegalEntityId && a.Status != AssetStatus.Draft && a.AcquisitionDate <= query.AsOf)
             .ToListAsync(cancellationToken);
@@ -779,10 +807,7 @@ public sealed class RegisterHandler(IFixedAssetsDbContext db, AssetScope scope) 
             .Where(a => a.DisposalDate is null || a.DisposalDate > query.AsOf)
             .Select(a =>
             {
-                var cost = a.AcquisitionCost + a.History.Where(h => h.Kind == AssetEventKinds.Revalued && h.Date <= query.AsOf).Sum(h => h.Amount ?? 0);
-                var accumulated = a.Schedule
-                    .Where(s => s.RunId is { } run && runEnds.TryGetValue(run, out var end) && end <= query.AsOf)
-                    .Sum(s => s.Amount);
+                var (cost, accumulated) = RegisterMath.PostingValues(a, runEnds, query.AsOf);
                 return new RegisterLineDto(a.Id, a.Number, a.NameEn, a.CategoryId, categories.GetValueOrDefault(a.CategoryId, "?"), a.Status.ToString(),
                     a.InServiceDate, cost, accumulated, cost - accumulated);
             })
