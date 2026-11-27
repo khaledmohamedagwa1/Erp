@@ -355,6 +355,9 @@ public abstract class SalesDocument : AggregateRoot, IBranchScoped, IWarehouseSc
 
     public string? Notes { get; private set; }
 
+    /// <summary>Employee credited with the sale (commissions, sales-by-salesperson). Optional; documents created from a source inherit it.</summary>
+    public Guid? SalespersonId { get; private set; }
+
     public decimal NetTotal { get; private set; }
 
     public decimal TaxTotal { get; private set; }
@@ -383,6 +386,9 @@ public abstract class SalesDocument : AggregateRoot, IBranchScoped, IWarehouseSc
         TaxTotal = Lines.Sum(l => l.TaxAmount);
         GrossTotal = Lines.Sum(l => l.GrossAmount);
     }
+
+    /// <summary>Sets the salesperson (validated by the application through the People contract).</summary>
+    public void AssignSalesperson(Guid? salespersonId) => SalespersonId = salespersonId;
 
     protected void SetPricing(decimal exchangeRate, Guid? priceListId, bool taxInclusive)
     {
@@ -705,6 +711,7 @@ public sealed class DeliveryNote : SalesDocument
             order.ExchangeRate, order.PriceListId, order.TaxInclusive, date, reference, notes)
     {
         SalesOrderId = order.Id;
+        AssignSalesperson(order.SalespersonId);
         Status = DeliveryStatus.Draft;
         SetLinesInternal(lines);
     }
@@ -910,7 +917,10 @@ public sealed class SalesInvoice : SalesDocument
         Status = SalesInvoiceStatus.Posted;
     }
 
-    /// <summary>Payment status reported by Finance (InvoiceSettled).</summary>
+    /// <summary>
+    /// Payment status reported by Finance (InvoiceSettled). A fully settled invoice with nothing left to return is <c>Closed</c>;
+    /// a settlement that reopens the receivable (e.g. a reversed receipt) moves a Paid or Closed invoice back to PartiallyPaid/Posted.
+    /// </summary>
     public void ApplySettlement(string status, decimal openAmount)
     {
         if (!IsPosted)
@@ -925,6 +935,32 @@ public sealed class SalesInvoice : SalesDocument
             "PartiallyPaid" => SalesInvoiceStatus.PartiallyPaid,
             _ => SalesInvoiceStatus.Posted,
         };
+        CloseIfComplete();
+    }
+
+    /// <summary>True when the invoice is fully settled and every line has been returned (no further action is possible).</summary>
+    public bool IsComplete => Status is (SalesInvoiceStatus.Paid or SalesInvoiceStatus.Closed) && OpenAmount == 0 && Lines.All(l => l.OpenToReturn == 0);
+
+    /// <summary>
+    /// Closes a fully paid invoice on request: no further credit notes can be raised against it. Reopened automatically if Finance
+    /// reports an open balance again (receipt reversal).
+    /// </summary>
+    public void Close()
+    {
+        if (Status != SalesInvoiceStatus.Paid || OpenAmount != 0)
+        {
+            throw Invalid(Status.ToString(), "closed");
+        }
+
+        Status = SalesInvoiceStatus.Closed;
+    }
+
+    private void CloseIfComplete()
+    {
+        if (IsComplete)
+        {
+            Status = SalesInvoiceStatus.Closed;
+        }
     }
 
     public void Cancel(DateOnly date)
@@ -956,7 +992,7 @@ public sealed class SalesInvoice : SalesDocument
 
     public void RegisterReturn(Guid lineUid, decimal quantity)
     {
-        if (!IsPosted)
+        if (!IsPosted || Status == SalesInvoiceStatus.Closed)
         {
             throw Invalid(Status.ToString(), "returned");
         }
@@ -969,6 +1005,7 @@ public sealed class SalesInvoice : SalesDocument
 
         line.AddReturned(quantity);
         TouchLines();
+        CloseIfComplete();
     }
 }
 
@@ -992,6 +1029,7 @@ public sealed class SalesReturn : SalesDocument
             invoice.Currency, invoice.ExchangeRate, invoice.PriceListId, invoice.TaxInclusive, date, invoice.Number, notes)
     {
         SalesInvoiceId = invoice.Id;
+        AssignSalesperson(invoice.SalespersonId);
         Reason = Guard.MaxLength(Guard.NotEmpty(reason, "sales.reason-required", "Reason"), 200, "sales.reason-too-long", "Reason");
         Status = SalesReturnStatus.Draft;
         SetLinesInternal(lines);

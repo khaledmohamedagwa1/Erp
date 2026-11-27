@@ -17,7 +17,8 @@ public sealed record ReportRequest(
     int? Days = null,
     string? BatchNumber = null,
     int Page = 1,
-    int PageSize = 100);
+    int PageSize = 100,
+    Guid? SalespersonId = null);
 
 /// <summary>A request with defaults applied and the product/category filter resolved to product ids.</summary>
 public sealed record ReportQuery(
@@ -36,7 +37,8 @@ public sealed record ReportQuery(
     int PageSize,
     bool ForExport,
     int ExportCap,
-    bool Arabic);
+    bool Arabic,
+    Guid? SalespersonId = null);
 
 public sealed record ReportDefinition(
     string Area,

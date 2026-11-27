@@ -189,6 +189,19 @@ Contract additions (additive only): `AccountingPermissions.OpeningBalanceManage`
 
 Multi-currency balance reporting and statements consolidated across legal entities.
 
+## Profit centers (wave 6, ADR-036)
+
+* `ProfitCenter` (code, name, optional branch, active) next to cost centers; `GET|POST /profit-centers`, `PUT /profit-centers/{id}`
+  (`accounting.account.read` / `.manage`). A branch maps to at most one profit center (`accounting.branch-already-mapped`).
+* `JournalLine.ProfitCenterId` — an analysis dimension, not part of `AccountBalance`. `JournalLineRequest.ProfitCenterId` sets it explicitly
+  (must be active, `accounting.profit-center-invalid`); otherwise `JournalRequest.BranchId` defaults every line to the active profit center of that
+  branch. Sales invoices/credit notes, POS receipts and over/short, and inventory journals whose warehouses share one branch pass their branch.
+  Manual journal lines accept `profitCenterId`. Reversals keep the profit center.
+* `GET /reports/income-statement?…&profitCenterId=` filters the statement; `GET /reports/profit-center-pnl?legalEntityId&from&to` returns net
+  revenue, cost of sales, gross profit, other income, operating expenses and net profit per profit center plus "(unassigned)", adding up to the
+  company income statement.
+* Not defaulted yet: Procurement, Finance, Manufacturing and Fixed-asset postings (no branch passed); commission runs.
+
 ## Contract additions (wave 5)
 
 * `JournalLineRequest.BaseOnly` (functional-currency-only line, e.g. a realized exchange difference in a foreign-currency journal) and

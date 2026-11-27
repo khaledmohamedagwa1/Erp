@@ -414,7 +414,8 @@ public sealed record ReceiptDto(
     DateTime CreatedAtUtc,
     IReadOnlyList<ReceiptLineDto> Lines,
     IReadOnlyList<ReceiptPaymentDto> Payments,
-    bool Replayed = false);
+    bool Replayed = false,
+    Guid? SalespersonId = null);
 
 /// <summary>The cart as the server prices it now (returned with 409 when the client's price version is stale).</summary>
 public sealed record RepricedCartDto(string PriceVersion, bool TaxInclusive, decimal NetTotal, decimal TaxTotal, decimal GrossTotal, IReadOnlyList<ReceiptLineDto> Lines);
@@ -473,7 +474,7 @@ public static class PosMapping
     public static ReceiptDto ToDto(PosReceipt r, bool replayed = false) => new(r.Id, r.Number, r.Kind.ToString(), r.Status.ToString(), r.TerminalId, r.ShiftId,
         r.ClientReceiptId, r.CustomerId, r.Currency, r.BusinessDate, r.PriceVersion, r.TaxInclusive, r.NetTotal, r.TaxTotal, r.GrossTotal, r.DiscountTotal,
         r.RoundingAdjustment, r.AmountDue, r.Tendered, r.Change, r.OriginalReceiptId, r.JournalId, r.CreatedAtUtc, r.Lines.Select(ToDto).ToList(),
-        r.Payments.Select(p => new ReceiptPaymentDto(p.Method.ToString(), p.Amount, p.Reference)).ToList(), replayed);
+        r.Payments.Select(p => new ReceiptPaymentDto(p.Method.ToString(), p.Amount, p.Reference)).ToList(), replayed, r.SalespersonId);
 }
 
 internal static class DuplicateKey

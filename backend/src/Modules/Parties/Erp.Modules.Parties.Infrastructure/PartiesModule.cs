@@ -26,6 +26,8 @@ public sealed record UpdateCustomerRequest(string Kind, string NameEn, string Na
 
 public sealed record CreditProfileRequest(decimal CreditLimit, string CreditAction, bool OnHold);
 
+public sealed record CustomerSalespersonRequest(Guid? SalespersonId);
+
 public sealed record CreateSupplierRequest(string Code, string NameEn, string NameAr, string? TaxRegistrationNo, string Currency, Guid? PaymentTermsId, string? PostingGroup);
 
 public sealed record UpdateSupplierRequest(string NameEn, string NameAr, string? TaxRegistrationNo, string Currency, Guid? PaymentTermsId, string? PostingGroup);
@@ -117,6 +119,9 @@ public sealed class PartiesModule : IErpModule
                 await WithIfMatch(http, async version => (await d.Send(new SetCreditProfileCommand(id, b.CreditLimit, b.CreditAction, b.OnHold, version), ct))
                     .ToHttpResult(c => WithETag(http, c.Version, c))))
             .RequirePermission(PartiesPermissions.CustomerCredit);
+        group.MapPut("/customers/{id:guid}/salesperson", async (Guid id, CustomerSalespersonRequest b, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new SetCustomerSalespersonCommand(id, b.SalespersonId), ct)).ToHttpResult())
+            .RequirePermission(PartiesPermissions.CustomerManage);
         group.MapPost("/customers/{id:guid}/deactivate", async (Guid id, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new DeactivatePartyCommand(PartyKind.Customer, id), ct)).ToHttpResult(_ => Results.NoContent()))
             .RequirePermission(PartiesPermissions.CustomerManage);

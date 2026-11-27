@@ -87,6 +87,7 @@ public static class SourceModules
     public const string Inventory = "inventory";
     public const string Manufacturing = "manufacturing";
     public const string FixedAssets = "fixed-assets";
+    public const string People = "people";
 }
 
 public static class AccountingPermissions
@@ -151,7 +152,8 @@ public sealed record JournalLineRequest(
     string? Description = null,
     decimal? BaseAmount = null,
     bool BaseOnly = false,
-    decimal? TaxableAmount = null);
+    decimal? TaxableAmount = null,
+    Guid? ProfitCenterId = null);
 
 public sealed record AccountInfo(
     Guid Id,
@@ -174,6 +176,7 @@ public interface IAccountQueries
 /// <summary>
 /// A posting request from a source document. (LegalEntityId, SourceDocType, SourceDocId, Purpose) is unique:
 /// posting the same request twice returns the existing journal, so callers may retry safely.
+/// <see cref="BranchId"/> (optional) defaults the profit center of lines that do not name one, through the branch → profit center mapping.
 /// </summary>
 public sealed record JournalRequest(
     Guid LegalEntityId,
@@ -185,7 +188,8 @@ public sealed record JournalRequest(
     string Description,
     string Currency,
     decimal ExchangeRate,
-    IReadOnlyList<JournalLineRequest> Lines);
+    IReadOnlyList<JournalLineRequest> Lines,
+    Guid? BranchId = null);
 
 public sealed record PostedJournal(Guid JournalId, string Number, decimal TotalBaseDebit, bool AlreadyPosted);
 

@@ -14,6 +14,8 @@ public interface IAccountingDbContext
 
     DbSet<CostCenter> CostCenters { get; }
 
+    DbSet<ProfitCenter> ProfitCenters { get; }
+
     DbSet<FiscalYear> FiscalYears { get; }
 
     DbSet<JournalEntry> Journals { get; }
@@ -213,6 +215,31 @@ public sealed class JournalPoster(
     }
 }
 
+/// <summary>
+/// Profit-center defaulting for module postings (ADR-036): explicit line profit centers must exist and be active; lines without one take
+/// the active profit center mapped to the request's branch (none when the branch is unmapped).
+/// </summary>
+public static class ProfitCenterDefaults
+{
+    public static readonly Error ProfitCenterInvalid = Error.Validation("accounting.profit-center-invalid", "The profit center does not exist or is inactive.");
+
+    public static async Task<Result<Guid?>> ResolveAsync(IAccountingDbContext db, JournalRequest request, CancellationToken ct)
+    {
+        var explicitIds = request.Lines.Where(l => l.ProfitCenterId != null).Select(l => l.ProfitCenterId!.Value).Distinct().ToList();
+        if (explicitIds.Count > 0 && await db.ProfitCenters.CountAsync(p => explicitIds.Contains(p.Id) && p.IsActive, ct) != explicitIds.Count)
+        {
+            return ProfitCenterInvalid;
+        }
+
+        if (request.BranchId is not { } branchId || request.Lines.All(l => l.ProfitCenterId != null))
+        {
+            return (Guid?)null;
+        }
+
+        return await db.ProfitCenters.AsNoTracking().Where(p => p.BranchId == branchId && p.IsActive).Select(p => (Guid?)p.Id).FirstOrDefaultAsync(ct);
+    }
+}
+
 /// <summary>The posting engine contract used by every operational module (ADR-006, ADR-011).</summary>
 public sealed class JournalPostingService(
     IAccountingDbContext db,
@@ -250,6 +277,13 @@ public sealed class JournalPostingService(
         }
 
         var rules = await db.PostingRules.ToListAsync(cancellationToken);
+        var profitCenters = await ProfitCenterDefaults.ResolveAsync(db, request, cancellationToken);
+        if (profitCenters.IsFailure)
+        {
+            return profitCenters.Error;
+        }
+
+        var branchProfitCenter = profitCenters.Value;
         JournalEntry journal;
         try
         {
@@ -277,14 +311,16 @@ public sealed class JournalPostingService(
                 }
 
                 var role = line.AccountId is null ? line.Role : null;
+                var profitCenterId = line.ProfitCenterId ?? branchProfitCenter;
                 if (line.BaseOnly)
                 {
-                    journal.AddBaseOnlyLine(accountId.Value, line.Debit, line.Credit, line.CostCenterId, line.PartyType, line.PartyId, line.Description, role);
+                    journal.AddBaseOnlyLine(accountId.Value, line.Debit, line.Credit, line.CostCenterId, line.PartyType, line.PartyId, line.Description, role,
+                        profitCenterId);
                 }
                 else
                 {
                     journal.AddLine(accountId.Value, line.Debit, line.Credit, line.CostCenterId, line.PartyType, line.PartyId, line.Description, line.BaseAmount,
-                        role, line.Context?.TaxCodeId, line.TaxableAmount);
+                        role, line.Context?.TaxCodeId, line.TaxableAmount, profitCenterId);
                 }
             }
         }
@@ -424,6 +460,7 @@ public sealed class LedgerQueries(IAccountingDbContext db) : ILedgerQueries
             JournalId = journal.Id,
             SourceDocType = journal.SourceDocType,
             CostCenterId = line.CostCenterId,
+            ProfitCenterId = line.ProfitCenterId,
             Number = journal.Number,
             JournalDate = journal.JournalDate,
             JournalDescription = journal.Description,
@@ -517,6 +554,8 @@ public sealed class LedgerRow
     public string SourceDocType { get; init; } = string.Empty;
 
     public Guid? CostCenterId { get; init; }
+
+    public Guid? ProfitCenterId { get; init; }
 
     public string? Number { get; init; }
 

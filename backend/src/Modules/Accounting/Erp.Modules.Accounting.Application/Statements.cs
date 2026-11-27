@@ -17,7 +17,7 @@ public sealed record StatementFigureDto(decimal Amount, decimal? Ytd, decimal? C
 
 public sealed record IncomeStatementDto(Guid LegalEntityId, string Currency, DateOnly From, DateOnly To, DateOnly? YtdFrom, DateOnly? ComparativeFrom,
     DateOnly? ComparativeTo, Guid? CostCenterId, IReadOnlyList<StatementSectionDto> Sections, StatementFigureDto NetRevenue, StatementFigureDto GrossProfit,
-    StatementFigureDto NetProfit);
+    StatementFigureDto NetProfit, Guid? ProfitCenterId = null);
 
 public sealed record BalanceSheetDto(Guid LegalEntityId, string Currency, DateOnly AsOf, DateOnly? ComparativeAsOf, IReadOnlyList<StatementSectionDto> Sections,
     StatementFigureDto TotalAssets, StatementFigureDto TotalLiabilities, StatementFigureDto TotalEquity, StatementFigureDto TotalLiabilitiesAndEquity, bool IsBalanced);
@@ -169,7 +169,8 @@ public sealed class FinancialStatementService(IAccountingDbContext db, LedgerQue
     }
 
     /// <summary>Debit-positive amount per account for journals dated in [from, to] (from = null: since inception).</summary>
-    public async Task<Dictionary<Guid, decimal>> SumAsync(Guid legalEntityId, DateOnly? from, DateOnly to, bool excludeClosing, Guid? costCenterId, CancellationToken ct)
+    public async Task<Dictionary<Guid, decimal>> SumAsync(Guid legalEntityId, DateOnly? from, DateOnly to, bool excludeClosing, Guid? costCenterId, CancellationToken ct,
+        Guid? profitCenterId = null)
     {
         var rows = ledger.PostedLines(legalEntityId).Where(r => r.JournalDate <= to);
         if (from is { } start)
@@ -185,6 +186,11 @@ public sealed class FinancialStatementService(IAccountingDbContext db, LedgerQue
         if (costCenterId is { } cc)
         {
             rows = rows.Where(r => r.CostCenterId == cc);
+        }
+
+        if (profitCenterId is { } pc)
+        {
+            rows = rows.Where(r => r.ProfitCenterId == pc);
         }
 
         var totals = await rows.GroupBy(r => r.AccountId)
@@ -204,7 +210,7 @@ public static class StatementErrors
 }
 
 public sealed record IncomeStatementQuery(Guid LegalEntityId, DateOnly From, DateOnly To, DateOnly? ComparativeFrom = null, DateOnly? ComparativeTo = null,
-    Guid? CostCenterId = null) : IQuery<IncomeStatementDto>;
+    Guid? CostCenterId = null, Guid? ProfitCenterId = null) : IQuery<IncomeStatementDto>;
 
 public sealed class IncomeStatementValidator : AbstractValidator<IncomeStatementQuery>
 {
@@ -229,16 +235,18 @@ public sealed class IncomeStatementHandler(FinancialStatementService statements,
         }
 
         var accounts = await statements.AccountsAsync(query.LegalEntityId, cancellationToken);
-        var current = await statements.SumAsync(query.LegalEntityId, query.From, query.To, true, query.CostCenterId, cancellationToken);
+        var current = await statements.SumAsync(query.LegalEntityId, query.From, query.To, true, query.CostCenterId, cancellationToken, query.ProfitCenterId);
         var year = await statements.FiscalYearAtAsync(query.LegalEntityId, query.To, cancellationToken);
-        var ytd = year is null ? null : await statements.SumAsync(query.LegalEntityId, year.StartDate, query.To, true, query.CostCenterId, cancellationToken);
+        var ytd = year is null
+            ? null
+            : await statements.SumAsync(query.LegalEntityId, year.StartDate, query.To, true, query.CostCenterId, cancellationToken, query.ProfitCenterId);
         var comparative = query.ComparativeFrom is { } cf && query.ComparativeTo is { } ctTo
-            ? await statements.SumAsync(query.LegalEntityId, cf, ctTo, true, query.CostCenterId, cancellationToken)
+            ? await statements.SumAsync(query.LegalEntityId, cf, ctTo, true, query.CostCenterId, cancellationToken, query.ProfitCenterId)
             : null;
 
         var (sections, netRevenue, gross, net) = FinancialStatementBuilder.IncomeStatement(accounts, current, ytd, comparative);
         return new IncomeStatementDto(query.LegalEntityId, le.Value.FunctionalCurrency, query.From, query.To, year?.StartDate, query.ComparativeFrom,
-            query.ComparativeTo, query.CostCenterId, sections, netRevenue, gross, net);
+            query.ComparativeTo, query.CostCenterId, sections, netRevenue, gross, net, query.ProfitCenterId);
     }
 }
 

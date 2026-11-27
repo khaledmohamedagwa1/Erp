@@ -496,7 +496,8 @@ public sealed record SalesDocumentDto(
     decimal? OpenAmount = null,
     string? Reason = null,
     Guid? ApprovalInstanceId = null,
-    IReadOnlyList<string>? Warnings = null);
+    IReadOnlyList<string>? Warnings = null,
+    Guid? SalespersonId = null);
 
 public sealed record SalesListResult(IReadOnlyList<SalesDocumentDto> Items, int Page, int PageSize, int TotalCount, decimal NetTotal, decimal TaxTotal, decimal GrossTotal);
 
@@ -509,7 +510,8 @@ public static class SalesMapping
 
     private static SalesDocumentDto Base(SalesDocument d, string type, string status, IReadOnlyList<string>? warnings) => new(
         d.Id, type, d.Number, d.IsNumbered, status, d.CustomerId, d.LegalEntityId, d.BranchId, d.WarehouseId, d.Currency, d.ExchangeRate, d.PriceListId,
-        d.TaxInclusive, d.DocumentDate, d.Reference, d.Notes, d.NetTotal, d.TaxTotal, d.GrossTotal, d.Lines.Select(ToDto).ToList(), Warnings: warnings);
+        d.TaxInclusive, d.DocumentDate, d.Reference, d.Notes, d.NetTotal, d.TaxTotal, d.GrossTotal, d.Lines.Select(ToDto).ToList(), Warnings: warnings,
+        SalespersonId: d.SalespersonId);
 
     public static SalesDocumentDto ToDto(SalesQuotation q) =>
         Base(q, SalesDocumentTypes.Quotation, q.Status.ToString(), null) with { ValidUntil = q.ValidUntil, Revision = q.Revision, SalesOrderId = q.ConvertedOrderId };

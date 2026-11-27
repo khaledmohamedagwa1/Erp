@@ -152,6 +152,9 @@ namespace Erp.Modules.Sales.Infrastructure.Migrations
                     b.Property<Guid>("SalesOrderId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("SalespersonId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -295,6 +298,9 @@ namespace Erp.Modules.Sales.Infrastructure.Migrations
                     b.Property<Guid?>("SalesOrderId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("SalespersonId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -424,6 +430,9 @@ namespace Erp.Modules.Sales.Infrastructure.Migrations
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
 
+                    b.Property<Guid?>("SalespersonId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<bool>("ShortClosed")
                         .HasColumnType("bit");
 
@@ -548,6 +557,9 @@ namespace Erp.Modules.Sales.Infrastructure.Migrations
                         .IsConcurrencyToken()
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
+
+                    b.Property<Guid?>("SalespersonId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -674,6 +686,9 @@ namespace Erp.Modules.Sales.Infrastructure.Migrations
                         .HasColumnType("rowversion");
 
                     b.Property<Guid>("SalesInvoiceId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SalespersonId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Status")

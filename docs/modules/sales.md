@@ -44,6 +44,7 @@ Every document carries:
 - currency and exchange rate (a spot rate, or 1 for the functional currency)
 - price list, the tax-inclusive flag and the date
 - `[Audited]`, a rowversion, and lines stored as JSON (`Lines`, each with a stable `Uid` and nested per-code `Taxes`)
+- an optional salesperson (`SalespersonId`, an employee of the People module) — see [people.md](people.md) for the defaulting rules
 
 Drafts carry a draft number (`D-<id>`). The legal number comes from `IDocumentNumberGenerator` at the step that makes the document legal:
 
@@ -69,10 +70,12 @@ Drafts carry a draft number (`D-<id>`). The legal number comes from `IDocumentNu
   - Created from an order; quantities ≤ open on the order minus quantities on other draft or picked notes.
   - Pick records the batch and serials per line. A line without a batch is allocated FEFO by inventory at posting (the suggestion is the inventory engine's FEFO allocation).
   - Reverse is allowed only while nothing on the note is invoiced.
-- **Sales invoice:** Draft → PendingApproval → Approved → Posted → PartiallyPaid / Paid, plus Cancelled.
+- **Sales invoice:** Draft → PendingApproval → Approved → Posted → PartiallyPaid / Paid → Closed, plus Cancelled.
   - Created from free lines, from an order (lines or all open quantities), or from a posted delivery note.
   - A draft, pending or approved invoice can be discarded. A posted invoice is cancelled only by full reversal, and only in status Posted: no payments and no returns.
-  - `Closed` exists in the enum for a later period-close step. Nothing sets it yet.
+  - **Closed** = nothing further can happen: set automatically when the invoice is fully settled *and* every line is fully returned, or on request
+    (`POST /invoices/{id}/close`) for a fully paid invoice without draft credit notes. A closed invoice accepts no credit notes. If Finance reports an
+    open balance again (receipt reversal) the invoice goes back to PartiallyPaid / Posted.
 - **Sales return (credit note):** Draft → Posted, plus Cancelled (drafts only).
   - The returned quantity must be ≤ invoiced − already returned − quantities on other draft returns. The error is `sales.return-exceeds-invoiced`.
 
@@ -158,6 +161,7 @@ COGS is booked by the inventory engine as a separate journal: purpose `inventory
 | Deliveries | `GET /deliveries`, `GET /deliveries/{id}`, `POST /deliveries`, `POST /deliveries/{id}/pick|post|reverse|cancel` |
 | Invoices | `GET /invoices`, `GET /invoices/{id}`, `POST /invoices/preview`, `POST /invoices`, `PUT /invoices/{id}/lines`, `POST /invoices/{id}/submit|post|cancel` |
 | Returns | `GET /returns`, `GET /returns/{id}`, `POST /returns`, `POST /returns/{id}/post|cancel` |
+| Salesperson / close | `PUT /quotations|orders|invoices/{id}/salesperson {salespersonId}` (drafts; quotation/order/invoice manage permission), `POST /invoices/{id}/close` (`sales.invoice.manage`). Create bodies of quotations, orders and invoices accept an optional `salespersonId`. |
 
 **Lists:**
 - Paged, with the filters `status`, `customerId`, `from`, `to` (document date), `branchId`, `page` and `pageSize`.
@@ -172,7 +176,6 @@ COGS is booked by the inventory engine as a separate journal: purpose `inventory
 - A return line restocks at the cost and batch of the first issue movement of its source line. A line issued from several batches or FIFO layers returns at the first one.
 - Order lines are invoiced at the order's unit; there is no unit change between documents.
 - Invoices created from an order or delivery cannot have their lines edited. Discard and recreate them instead.
-- `Closed` (invoice) is not set yet.
 - Multi-currency invoices use the spot rate of the document date. Realized FX is handled by Finance at settlement.
 
 ## Tests

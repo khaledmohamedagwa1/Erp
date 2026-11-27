@@ -758,7 +758,8 @@ public sealed class InventoryPostingService(
 
         var result = await journals.PostAsync(new JournalRequest(
             ctx.LegalEntity.Id, request.TransactionDate, request.SourceModule, request.SourceDocType, request.SourceDocId, JournalPurpose,
-            request.JournalDescription ?? $"{request.SourceDocType} {request.ReferenceNo}".Trim(), ctx.LegalEntity.FunctionalCurrency, 1m, lines), ct);
+            request.JournalDescription ?? $"{request.SourceDocType} {request.ReferenceNo}".Trim(), ctx.LegalEntity.FunctionalCurrency, 1m, lines,
+            BranchId: SingleBranch(ctx, posted.Select(p => p.Work.Line.WarehouseId))), ct);
         return result.IsSuccess ? result.Value.JournalId : result.Error;
     }
 
@@ -784,8 +785,16 @@ public sealed class InventoryPostingService(
 
         var result = await journals.PostAsync(new JournalRequest(
             ctx.LegalEntity.Id, request.TransactionDate, SourceModules.Inventory, request.SourceDocType, request.SourceDocId, TrueUpPurpose,
-            "Cost true-up after negative stock", ctx.LegalEntity.FunctionalCurrency, 1m, lines), ct);
+            "Cost true-up after negative stock", ctx.LegalEntity.FunctionalCurrency, 1m, lines,
+            BranchId: SingleBranch(ctx, trueUps.Select(t => t.Work.Line.WarehouseId))), ct);
         return result.IsSuccess ? Result.Success() : result.Error;
+    }
+
+    /// <summary>The branch shared by every warehouse of the posting (defaults the journal's profit center); null when they differ or none has a branch.</summary>
+    private static Guid? SingleBranch(PostingContextResolver.Resolved ctx, IEnumerable<Guid> warehouseIds)
+    {
+        var branches = warehouseIds.Distinct().Select(id => ctx.Warehouses[id].BranchId).Distinct().ToList();
+        return branches.Count == 1 ? branches[0] : null;
     }
 
     private static InventoryPostingResult BuildResult(

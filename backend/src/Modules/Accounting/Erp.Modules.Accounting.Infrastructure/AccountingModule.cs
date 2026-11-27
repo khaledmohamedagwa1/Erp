@@ -26,6 +26,8 @@ public sealed record CashFlowCategoryRequest(string Category);
 
 public sealed record ReportGroupRequest(string Group);
 
+public sealed record UpdateProfitCenterRequest(string Name, Guid? BranchId, bool IsActive);
+
 public sealed class AccountingModule : IErpModule
 {
     public ModuleManifest Manifest { get; } = new(
@@ -36,8 +38,8 @@ public sealed class AccountingModule : IErpModule
         DependsOn: [],
         Permissions:
         [
-            new(AccountingPermissions.AccountRead, "accounting", "View the chart of accounts, cost centres and posting rules", "عرض دليل الحسابات ومراكز التكلفة وقواعد الترحيل"),
-            new(AccountingPermissions.AccountManage, "accounting", "Change the chart of accounts and cost centres", "تعديل دليل الحسابات ومراكز التكلفة", IsSensitive: true),
+            new(AccountingPermissions.AccountRead, "accounting", "View the chart of accounts, cost and profit centres and posting rules", "عرض دليل الحسابات ومراكز التكلفة والربحية وقواعد الترحيل"),
+            new(AccountingPermissions.AccountManage, "accounting", "Change the chart of accounts, cost and profit centres", "تعديل دليل الحسابات ومراكز التكلفة والربحية", IsSensitive: true),
             new(AccountingPermissions.PostingRuleManage, "accounting", "Change posting rules (account determination)", "تعديل قواعد الترحيل", IsSensitive: true),
             new(AccountingPermissions.PeriodManage, "accounting", "Create fiscal years; open, soft-close, close and reopen periods", "إنشاء السنوات المالية وفتح الفترات وإغلاقها", IsSensitive: true),
             new(AccountingPermissions.PostInSoftClosedPeriod, "accounting", "Post into soft-closed periods", "الترحيل في فترات مغلقة مبدئيًا", IsSensitive: true),
@@ -157,6 +159,14 @@ public sealed class AccountingModule : IErpModule
         g.MapPost("/cost-centers", async (CreateCostCenterCommand body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(body, ct)).ToHttpResult(c => Results.Created($"/api/v1/accounting/cost-centers/{c.Id}", c)))
             .RequirePermission(AccountingPermissions.AccountManage);
+        g.MapGet("/profit-centers", async (IDispatcher d, CancellationToken ct) => (await d.Send(new ListProfitCentersQuery(), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.AccountRead);
+        g.MapPost("/profit-centers", async (CreateProfitCenterCommand body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(body, ct)).ToHttpResult(c => Results.Created($"/api/v1/accounting/profit-centers/{c.Id}", c)))
+            .RequirePermission(AccountingPermissions.AccountManage);
+        g.MapPut("/profit-centers/{id:guid}", async (Guid id, UpdateProfitCenterRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new UpdateProfitCenterCommand(id, body.Name, body.BranchId, body.IsActive), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.AccountManage);
         g.MapGet("/posting-rules", async (IDispatcher d, CancellationToken ct) => (await d.Send(new ListPostingRulesQuery(), ct)).ToHttpResult())
             .RequirePermission(AccountingPermissions.AccountRead);
         g.MapPut("/posting-rules", async (UpsertPostingRuleCommand body, IDispatcher d, CancellationToken ct) => (await d.Send(body, ct)).ToHttpResult())
@@ -191,8 +201,11 @@ public sealed class AccountingModule : IErpModule
                 (await d.Send(new GeneralLedgerQuery(legalEntityId, accountId, from, to), ct)).ToHttpResult())
             .RequirePermission(AccountingPermissions.ReportRead);
         g.MapGet("/reports/income-statement", async (Guid legalEntityId, DateOnly from, DateOnly to, DateOnly? compareFrom, DateOnly? compareTo, Guid? costCenterId,
-                IDispatcher d, CancellationToken ct) =>
-                (await d.Send(new IncomeStatementQuery(legalEntityId, from, to, compareFrom, compareTo, costCenterId), ct)).ToHttpResult())
+                Guid? profitCenterId, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new IncomeStatementQuery(legalEntityId, from, to, compareFrom, compareTo, costCenterId, profitCenterId), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.ReportRead);
+        g.MapGet("/reports/profit-center-pnl", async (Guid legalEntityId, DateOnly from, DateOnly to, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ProfitCenterPnlQuery(legalEntityId, from, to), ct)).ToHttpResult())
             .RequirePermission(AccountingPermissions.ReportRead);
         g.MapGet("/reports/balance-sheet", async (Guid legalEntityId, DateOnly asOf, DateOnly? compareAsOf, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new BalanceSheetQuery(legalEntityId, asOf, compareAsOf), ct)).ToHttpResult())

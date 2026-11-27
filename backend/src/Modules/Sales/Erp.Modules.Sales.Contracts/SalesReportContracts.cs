@@ -8,12 +8,15 @@ public sealed record SalesReportFilter(
     Guid? BranchId = null,
     Guid? WarehouseId = null,
     Guid? CustomerId = null,
-    IReadOnlyCollection<Guid>? ProductIds = null);
+    IReadOnlyCollection<Guid>? ProductIds = null,
+    Guid? SalespersonId = null,
+    Guid? LegalEntityId = null);
 
 /// <summary>
 /// One posted sales document line in functional currency. Credit notes (returns) are negative.
 /// <see cref="CostBase"/> is the cost of goods sold recorded for the line, rounded to cents as journalised (the restock cost for returned goods, zero when
 /// the goods were not restocked). <see cref="DocumentType"/> is <see cref="SalesDocumentTypes.Invoice"/> or <see cref="SalesDocumentTypes.Return"/>.
+/// <see cref="SalespersonId"/> is the document's salesperson (credit notes inherit the invoice's).
 /// </summary>
 public sealed record SalesFact(
     string DocumentType,
@@ -30,7 +33,9 @@ public sealed record SalesFact(
     decimal BaseQuantity,
     decimal NetBase,
     decimal TaxBase,
-    decimal CostBase);
+    decimal CostBase,
+    Guid? LegalEntityId = null,
+    Guid? SalespersonId = null);
 
 /// <summary>Read access to posted sales for reporting and document printing.</summary>
 public interface ISalesReportQueries

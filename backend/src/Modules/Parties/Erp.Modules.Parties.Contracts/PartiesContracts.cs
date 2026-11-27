@@ -14,7 +14,8 @@ public sealed record CustomerInfo(
     bool OnHold,
     bool IsActive,
     bool IsWalkIn,
-    string? TaxRegistrationNo = null);
+    string? TaxRegistrationNo = null,
+    Guid? SalespersonId = null);
 
 public sealed record SupplierInfo(
     Guid Id,

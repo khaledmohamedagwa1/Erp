@@ -308,6 +308,52 @@ public sealed class CostCenter : AggregateRoot, ICompanyScoped
             Guard.MaxLength(Guard.NotEmpty(name, "accounting.name-required", "Name"), 200, "accounting.name-too-long", "Name"), parentId);
 }
 
+/// <summary>
+/// Profit center: an analysis dimension on journal lines for profit-and-loss by business unit. A branch can be mapped to one
+/// profit center; module postings that know their branch then default the profit center of every line (ADR-036).
+/// </summary>
+[Audited]
+public sealed class ProfitCenter : AggregateRoot, ICompanyScoped
+{
+    private ProfitCenter()
+    {
+    }
+
+    private ProfitCenter(Guid id, Guid companyId, string code, string name, Guid? branchId)
+        : base(id)
+    {
+        CompanyId = companyId;
+        Code = code;
+        Name = name;
+        BranchId = branchId;
+        IsActive = true;
+    }
+
+    public Guid CompanyId { get; private set; }
+
+    public string Code { get; private set; } = string.Empty;
+
+    public string Name { get; private set; } = string.Empty;
+
+    /// <summary>Branch whose postings default to this profit center (at most one profit center per branch).</summary>
+    public Guid? BranchId { get; private set; }
+
+    public bool IsActive { get; private set; }
+
+    public static ProfitCenter Create(Guid companyId, string code, string name, Guid? branchId) =>
+        new(SequentialGuid.New(), companyId, AccountingErrors.Code(code), ValidName(name), branchId);
+
+    public void Update(string name, Guid? branchId, bool isActive)
+    {
+        Name = ValidName(name);
+        BranchId = branchId;
+        IsActive = isActive;
+    }
+
+    private static string ValidName(string name) =>
+        Guard.MaxLength(Guard.NotEmpty(name, "accounting.name-required", "Name"), 200, "accounting.name-too-long", "Name");
+}
+
 public enum PeriodStatus
 {
     Open = 1,
@@ -617,7 +663,7 @@ public sealed class JournalEntry : AggregateRoot, ICompanyScoped
     public static decimal ToBase(decimal amount, decimal rate) => Math.Round(amount * rate, 2, MidpointRounding.AwayFromZero);
 
     public void AddLine(Guid accountId, decimal debit, decimal credit, Guid? costCenterId = null, string? partyType = null, Guid? partyId = null, string? description = null, decimal? baseAmount = null,
-        string? postingRole = null, Guid? taxCodeId = null, decimal? taxableAmount = null)
+        string? postingRole = null, Guid? taxCodeId = null, decimal? taxableAmount = null, Guid? profitCenterId = null)
     {
         EnsureDraft();
         if (debit < 0 || credit < 0 || (debit > 0) == (credit > 0))
@@ -636,7 +682,7 @@ public sealed class JournalEntry : AggregateRoot, ICompanyScoped
         var baseCredit = credit > 0 ? fixedBase ?? ToBase(credit, ExchangeRate) : 0m;
         var taxableBase = taxableAmount is null ? (decimal?)null : ToBase(taxableAmount.Value, ExchangeRate);
         _lines.Add(new JournalLine(SequentialGuid.New(), Id, _lines.Count + 1, accountId, debit, credit,
-            baseDebit, baseCredit, costCenterId, partyType, partyId, description, postingRole, taxCodeId, taxableBase));
+            baseDebit, baseCredit, costCenterId, partyType, partyId, description, postingRole, taxCodeId, taxableBase, profitCenterId));
     }
 
     /// <summary>
@@ -644,7 +690,7 @@ public sealed class JournalEntry : AggregateRoot, ICompanyScoped
     /// foreign-currency settlement. Exactly one of the base amounts must be positive.
     /// </summary>
     public void AddBaseOnlyLine(Guid accountId, decimal baseDebit, decimal baseCredit, Guid? costCenterId = null, string? partyType = null, Guid? partyId = null,
-        string? description = null, string? postingRole = null)
+        string? description = null, string? postingRole = null, Guid? profitCenterId = null)
     {
         EnsureDraft();
         baseDebit = Math.Round(baseDebit, 2, MidpointRounding.AwayFromZero);
@@ -655,7 +701,7 @@ public sealed class JournalEntry : AggregateRoot, ICompanyScoped
         }
 
         _lines.Add(new JournalLine(SequentialGuid.New(), Id, _lines.Count + 1, accountId, 0m, 0m,
-            baseDebit, baseCredit, costCenterId, partyType, partyId, description, postingRole));
+            baseDebit, baseCredit, costCenterId, partyType, partyId, description, postingRole, profitCenterId: profitCenterId));
     }
 
     public void ClearLines()
@@ -746,7 +792,7 @@ public sealed class JournalEntry : AggregateRoot, ICompanyScoped
         {
             reversal._lines.Add(new JournalLine(SequentialGuid.New(), reversal.Id, line.LineNo, line.AccountId, line.Credit, line.Debit,
                 line.BaseCredit, line.BaseDebit, line.CostCenterId, line.PartyType, line.PartyId, line.Description,
-                line.PostingRole, line.TaxCodeId, line.TaxableBase));
+                line.PostingRole, line.TaxCodeId, line.TaxableBase, line.ProfitCenterId));
         }
 
         return reversal;
@@ -780,9 +826,10 @@ public sealed class JournalLine : ITenantScoped
 
     internal JournalLine(Guid id, Guid journalEntryId, int lineNo, Guid accountId, decimal debit, decimal credit, decimal baseDebit,
         decimal baseCredit, Guid? costCenterId, string? partyType, Guid? partyId, string? description,
-        string? postingRole = null, Guid? taxCodeId = null, decimal? taxableBase = null)
+        string? postingRole = null, Guid? taxCodeId = null, decimal? taxableBase = null, Guid? profitCenterId = null)
     {
         Id = id;
+        ProfitCenterId = profitCenterId;
         PostingRole = postingRole is { Length: > 60 } ? postingRole[..60] : postingRole;
         TaxCodeId = taxCodeId;
         TaxableBase = taxableBase;
@@ -818,6 +865,9 @@ public sealed class JournalLine : ITenantScoped
     public decimal BaseCredit { get; private set; }
 
     public Guid? CostCenterId { get; private set; }
+
+    /// <summary>Profit center analysis dimension (explicit on the request, or defaulted from the posting's branch).</summary>
+    public Guid? ProfitCenterId { get; private set; }
 
     public string? PartyType { get; private set; }
 

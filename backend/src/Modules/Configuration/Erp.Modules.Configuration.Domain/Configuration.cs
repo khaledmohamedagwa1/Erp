@@ -20,6 +20,7 @@ public static class ModuleCatalog
         new("finance", "Receivables, payables, cash & bank", "الذمم والنقدية والبنوك", true, ["accounting"]),
         new("workflow", "Approvals", "الموافقات", true, []),
         new("reporting", "Reports", "التقارير", true, []),
+        new("people", "Employees & salespersons", "الموظفون ومندوبو المبيعات", true, []),
         new("inventory", "Inventory", "المخزون", false, []),
         new("sales", "Sales", "المبيعات", false, []),
         new("procurement", "Purchasing", "المشتريات", false, []),

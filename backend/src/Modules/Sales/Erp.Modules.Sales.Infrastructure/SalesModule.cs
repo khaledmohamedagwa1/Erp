@@ -20,6 +20,8 @@ namespace Erp.Modules.Sales.Infrastructure;
 
 public sealed record LinesBody(IReadOnlyList<SalesLineRequest> Lines);
 
+public sealed record SalespersonBody(Guid? SalespersonId);
+
 public sealed record DateBody(DateOnly? Date);
 
 public sealed record PickBody(IReadOnlyList<PickLine> Lines);
@@ -71,6 +73,7 @@ public sealed class SalesModule : IErpModule
         services.AddScoped<SalesSubmission>();
         services.AddScoped<OrderConfirmation>();
         services.AddScoped<InvoiceBuilder>();
+        services.AddScoped<SalespersonResolver>();
 
         // Until the Workflow engine is installed nothing needs approval (it registers the real service, which wins).
         services.TryAddScoped<IApprovalService, NoApprovalRequired>();
@@ -163,6 +166,20 @@ public sealed class SalesModule : IErpModule
             .RequirePermission(SalesPermissions.InvoiceManage).RequireIdempotency();
         g.MapPost("/invoices/{id:guid}/post", async (Guid id, IDispatcher d, CancellationToken ct) => (await d.Send(new PostInvoiceCommand(id), ct)).ToHttpResult())
             .RequirePermission(SalesPermissions.InvoicePost).RequireIdempotency();
+        g.MapPost("/invoices/{id:guid}/close", async (Guid id, IDispatcher d, CancellationToken ct) => (await d.Send(new CloseInvoiceCommand(id), ct)).ToHttpResult())
+            .RequirePermission(SalesPermissions.InvoiceManage).RequireIdempotency();
+        foreach (var (path, document, permission) in new[]
+                 {
+                     ("quotations", SalespersonDocument.Quotation, SalesPermissions.QuotationManage),
+                     ("orders", SalespersonDocument.Order, SalesPermissions.OrderManage),
+                     ("invoices", SalespersonDocument.Invoice, SalesPermissions.InvoiceManage),
+                 })
+        {
+            g.MapPut($"/{path}/{{id:guid}}/salesperson", async (Guid id, SalespersonBody b, IDispatcher d, CancellationToken ct) =>
+                    (await d.Send(new SetSalespersonCommand(document, id, b.SalespersonId), ct)).ToHttpResult())
+                .RequirePermission(permission);
+        }
+
         g.MapPost("/invoices/{id:guid}/cancel", async (Guid id, DateBody? b, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new CancelInvoiceCommand(id, b?.Date), ct)).ToHttpResult())
             .RequirePermission(SalesPermissions.InvoiceCancel).RequireIdempotency();

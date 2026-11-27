@@ -199,6 +199,13 @@ Only online submission and the idempotent resend are implemented. The design for
 - **Server-side amounts:** prices, discounts, taxes, rounding and totals are always computed on the server.
 - **Tenant isolation:** all tables carry the shadow TenantId and the tenant/company query filters. Reading another tenant's terminal, shift or receipt returns 404.
 
+## Salesperson (wave 6)
+
+Receipts carry an optional `SalespersonId`: `salespersonId` in the submit body (must be an active salesperson, `pos.salesperson-invalid`), otherwise
+the customer's default salesperson, otherwise the cashier's linked employee when it is a salesperson. Refunds inherit the sale's. `IPosSalesQueries`
+(Pos.Contracts) exposes completed receipts and refunds as sales facts for the by-salesperson report and commissions. Receipt and over/short journals
+pass the terminal's branch, so they default to the branch's profit center.
+
 ## Endpoints (`/api/v1/pos`)
 
 All require authorization, an active company and the module.

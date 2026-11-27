@@ -4,6 +4,7 @@ using Erp.Application.Paging;
 using Erp.Modules.Organization.Contracts;
 using Erp.Modules.Parties.Contracts;
 using Erp.Modules.Parties.Domain;
+using Erp.Modules.People.Contracts;
 using Erp.SharedKernel.Results;
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
@@ -60,7 +61,7 @@ public sealed record CustomerListItemDto(Guid Id, string Code, string NameEn, st
 public sealed record CustomerDto(
     Guid Id, string Code, string Kind, string NameEn, string NameAr, string? TaxRegistrationNo, string Currency,
     Guid? CustomerGroupId, Guid? PriceListId, Guid? PaymentTermsId, string PostingGroup, CreditProfileDto Credit,
-    bool IsActive, bool IsWalkIn, IReadOnlyList<ContactDto> Contacts, IReadOnlyList<AddressDto> Addresses, string Version);
+    bool IsActive, bool IsWalkIn, IReadOnlyList<ContactDto> Contacts, IReadOnlyList<AddressDto> Addresses, string Version, Guid? SalespersonId = null);
 
 public sealed record SupplierListItemDto(Guid Id, string Code, string NameEn, string NameAr, string Currency, bool IsActive);
 
@@ -107,7 +108,7 @@ internal static class PartiesMapping
     public static CustomerDto ToDto(IPartiesDbContext db, Customer c) => new(
         c.Id, c.Code, c.Kind.ToString(), c.NameEn, c.NameAr, c.TaxRegistrationNo, c.Currency, c.CustomerGroupId, c.PriceListId,
         c.PaymentTermsId, c.PostingGroup, new CreditProfileDto(c.CreditLimit, c.CreditAction.ToString(), c.OnHold),
-        c.IsActive, c.IsWalkIn, c.Contacts.Select(ToDto).ToList(), c.Addresses.Select(ToDto).ToList(), Version(db, c));
+        c.IsActive, c.IsWalkIn, c.Contacts.Select(ToDto).ToList(), c.Addresses.Select(ToDto).ToList(), Version(db, c), c.SalespersonId);
 
     public static SupplierDto ToDto(IPartiesDbContext db, Supplier s) => new(
         s.Id, s.Code, s.NameEn, s.NameAr, s.TaxRegistrationNo, s.Currency, s.PaymentTermsId, s.PostingGroup, s.IsActive,
@@ -381,6 +382,33 @@ public sealed class UpdateCustomerHandler(IPartiesDbContext db) : ICommandHandle
         var d = command.Details;
         customer.Update(Enum.Parse<CustomerKind>(d.Kind, true), d.NameEn, d.NameAr, d.TaxRegistrationNo, d.Currency,
             d.CustomerGroupId, d.PriceListId, d.PaymentTermsId, d.PostingGroup);
+        await db.SaveChangesAsync(cancellationToken);
+        return PartiesMapping.ToDto(db, customer);
+    }
+}
+
+/// <summary>Sets (or clears) the customer's default salesperson; it must be an active employee flagged as salesperson.</summary>
+public sealed record SetCustomerSalespersonCommand(Guid CustomerId, Guid? SalespersonId) : ICommand<CustomerDto>;
+
+public sealed class SetCustomerSalespersonHandler(IPartiesDbContext db, IServiceProvider services) : ICommandHandler<SetCustomerSalespersonCommand, CustomerDto>
+{
+    public static readonly Error SalespersonInvalid = Error.Validation("parties.salesperson-invalid", "The salesperson must be an active employee flagged as salesperson.");
+
+    public async Task<Result<CustomerDto>> Handle(SetCustomerSalespersonCommand command, CancellationToken cancellationToken)
+    {
+        var customer = await db.Customers.FirstOrDefaultAsync(c => c.Id == command.CustomerId, cancellationToken);
+        if (customer is null)
+        {
+            return PartiesErrors.CustomerNotFound;
+        }
+
+        if (command.SalespersonId is { } id &&
+            (services.GetService(typeof(IEmployeeQueries)) is not IEmployeeQueries employees || await employees.GetEmployeeAsync(id, cancellationToken) is not { CanSell: true }))
+        {
+            return SalespersonInvalid;
+        }
+
+        customer.AssignSalesperson(command.SalespersonId);
         await db.SaveChangesAsync(cancellationToken);
         return PartiesMapping.ToDto(db, customer);
     }
@@ -731,7 +759,7 @@ public sealed class PartyQueries(IPartiesDbContext db, ITenantContext tenant, IO
     public async Task<CustomerInfo?> GetCustomerAsync(Guid customerId, CancellationToken cancellationToken = default) =>
         await db.Customers.AsNoTracking().Where(c => c.Id == customerId)
             .Select(c => new CustomerInfo(c.Id, c.Code, c.NameEn, c.NameAr, c.Currency, c.PriceListId, c.PaymentTermsId, c.PostingGroup,
-                c.CreditLimit, c.CreditAction.ToString(), c.OnHold, c.IsActive, c.IsWalkIn, c.TaxRegistrationNo))
+                c.CreditLimit, c.CreditAction.ToString(), c.OnHold, c.IsActive, c.IsWalkIn, c.TaxRegistrationNo, c.SalespersonId))
             .FirstOrDefaultAsync(cancellationToken);
 
     public async Task<SupplierInfo?> GetSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default) =>

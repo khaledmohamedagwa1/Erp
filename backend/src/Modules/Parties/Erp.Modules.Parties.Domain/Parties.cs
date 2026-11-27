@@ -469,6 +469,12 @@ public sealed class Customer : Party
     /// <summary>System customer for anonymous cash/POS sales. Exactly one per company; cannot be deactivated.</summary>
     public bool IsWalkIn { get; private set; }
 
+    /// <summary>Default salesperson (an employee, People module) for new sales documents of this customer.</summary>
+    public Guid? SalespersonId { get; private set; }
+
+    /// <summary>Assigns the default salesperson (validated by the application through the People contract).</summary>
+    public void AssignSalesperson(Guid? salespersonId) => SalespersonId = salespersonId;
+
     public static Customer Create(
         Guid companyId, string code, CustomerKind kind, string nameEn, string nameAr, string? taxRegistrationNo, string currency,
         Guid? customerGroupId, Guid? priceListId, Guid? paymentTermsId, string? postingGroup)

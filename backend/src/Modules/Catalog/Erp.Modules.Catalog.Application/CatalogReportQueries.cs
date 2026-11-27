@@ -26,6 +26,9 @@ public sealed class CatalogReportQueries(ICatalogDbContext db) : ICatalogReportQ
         }).ToList();
     }
 
+    public Task<bool> CategoryExistsAsync(Guid categoryId, CancellationToken cancellationToken = default) =>
+        db.Categories.AsNoTracking().AnyAsync(c => c.Id == categoryId, cancellationToken);
+
     public async Task<IReadOnlyCollection<Guid>> GetProductIdsInCategoryAsync(Guid categoryId, CancellationToken cancellationToken = default)
     {
         var all = await db.Categories.AsNoTracking().Select(c => new { c.Id, c.ParentId }).ToListAsync(cancellationToken);

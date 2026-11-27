@@ -258,7 +258,7 @@ public sealed class CloseShiftHandler(
                 .Add(cash.Role, cash.AccountId, shortage ? 0 : amount, shortage ? amount : 0, description: $"Drawer {terminal.Code}")
                 .Lines;
             var posted = await journals.PostAsync(new JournalRequest(shift.LegalEntityId, shift.BusinessDate, SourceModules.Pos, PosDocumentTypes.Shift, shift.Id,
-                "over-short", $"POS cash over/short {shift.Number}", shift.Currency, 1m, lines), ct);
+                "over-short", $"POS cash over/short {shift.Number}", shift.Currency, 1m, lines, terminal.BranchId), ct);
             if (posted.IsFailure)
             {
                 return posted.Error;

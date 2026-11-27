@@ -89,13 +89,24 @@ public sealed class SalesReportQueries(ISalesDbContext db) : ISalesReportQueries
             source = source.Where(d => d.CustomerId == customer);
         }
 
+        if (filter.SalespersonId is { } salesperson)
+        {
+            source = source.Where(d => d.SalespersonId == salesperson);
+        }
+
+        if (filter.LegalEntityId is { } legalEntity)
+        {
+            source = source.Where(d => d.LegalEntityId == legalEntity);
+        }
+
         return source;
     }
 
     private static SalesFact Fact(string type, SalesDocument document, SalesLine line, int sign, decimal cost) => new(
         type, document.Id, document.Number, document.DocumentDate, document.BranchId, document.WarehouseId, document.CustomerId,
         line.ProductId, line.Sku, line.Description, line.IsService,
-        sign * line.BaseQuantity, sign * ToBase(line.NetAmount, document.ExchangeRate), sign * ToBase(line.TaxAmount, document.ExchangeRate), sign * ToBase(cost, 1m));
+        sign * line.BaseQuantity, sign * ToBase(line.NetAmount, document.ExchangeRate), sign * ToBase(line.TaxAmount, document.ExchangeRate), sign * ToBase(cost, 1m),
+        document.LegalEntityId, document.SalespersonId);
 
     private static decimal ToBase(decimal amount, decimal rate) => Math.Round(amount * rate, 2, MidpointRounding.AwayFromZero);
 
