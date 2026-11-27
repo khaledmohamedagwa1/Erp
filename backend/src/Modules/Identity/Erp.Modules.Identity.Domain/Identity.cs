@@ -16,6 +16,15 @@ public static class IdentityErrors
     public static readonly Error RoleNameTaken = Error.Conflict("identity.role-name-taken", "A role with this name already exists.");
     public static readonly Error SystemRoleLocked = Error.Conflict("identity.system-role-locked", "System roles cannot be changed.");
     public static readonly Error UnknownPermission = Error.Validation("identity.unknown-permission", "One or more permissions do not exist.");
+    public static readonly Error MfaAlreadyEnabled = Error.Conflict("identity.mfa-already-enabled", "Two-step verification is already enabled.");
+    public static readonly Error MfaNotEnrolling = Error.Conflict("identity.mfa-not-enrolling", "Start enrollment before confirming a code.");
+    public static readonly Error MfaNotEnabled = Error.Conflict("identity.mfa-not-enabled", "Two-step verification is not enabled.");
+    public static readonly Error MfaInvalidCode = Error.Unauthorized("auth.mfa-invalid-code", "The verification code is invalid or was already used.");
+    public static readonly Error MfaChallengeInvalid = Error.Unauthorized("auth.mfa-challenge-invalid", "The sign-in challenge has expired. Sign in again.");
+    public static readonly Error PasswordChangeRequired = Error.Forbidden("auth.password-change-required", "You must choose a new password before signing in.");
+    public static readonly Error PasswordChangeTokenInvalid = Error.Unauthorized("auth.password-change-token-invalid", "The password-change link has expired. Sign in again.");
+    public static readonly Error InvalidCurrentPassword = Error.Validation("identity.invalid-current-password", "The current password is incorrect.");
+    public static readonly Error CannotDeactivateSelf = Error.Conflict("identity.cannot-deactivate-self", "You cannot deactivate your own account.");
 }
 
 public static class LoginPolicy
@@ -50,7 +59,28 @@ public sealed class User : AggregateRoot, ITenantScoped
 
     public string DisplayName { get; private set; } = string.Empty;
 
+    [Sensitive]
     public string PasswordHash { get; private set; } = string.Empty;
+
+    /// <summary>Set by an administrator's password reset: the user must choose a new password before signing in.</summary>
+    public bool MustChangePassword { get; private set; }
+
+    public bool MfaEnabled { get; private set; }
+
+    /// <summary>TOTP secret, encrypted with ASP.NET Core Data Protection.</summary>
+    [Sensitive]
+    public string? MfaSecretProtected { get; private set; }
+
+    /// <summary>Secret generated at enrollment, active only after the user confirms a code.</summary>
+    [Sensitive]
+    public string? PendingMfaSecretProtected { get; private set; }
+
+    /// <summary>Last accepted TOTP time step — a code can be used only once.</summary>
+    public long? MfaLastTimeStep { get; private set; }
+
+    /// <summary>SHA-256 hashes of unused recovery codes.</summary>
+    [Sensitive]
+    public List<string> RecoveryCodeHashes { get; private set; } = [];
 
     public bool IsActive { get; private set; }
 
@@ -96,9 +126,97 @@ public sealed class User : AggregateRoot, ITenantScoped
         LastLoginAtUtc = nowUtc;
     }
 
-    public void ChangePasswordHash(string passwordHash) => PasswordHash = Guard.NotEmpty(passwordHash, "identity.password-required", "Password");
+    public void ResetFailedAttempts() => AccessFailedCount = 0;
+
+    /// <summary>The user chose a new password (also clears a pending forced change).</summary>
+    public void ChangePasswordHash(string passwordHash)
+    {
+        PasswordHash = Guard.NotEmpty(passwordHash, "identity.password-required", "Password");
+        MustChangePassword = false;
+        Raise(new PasswordChanged(Id));
+    }
+
+    /// <summary>Administrator reset: temporary password, unlocks the account, forces a change at next sign-in.</summary>
+    public void SetTemporaryPassword(string passwordHash)
+    {
+        PasswordHash = Guard.NotEmpty(passwordHash, "identity.password-required", "Password");
+        MustChangePassword = true;
+        AccessFailedCount = 0;
+        LockoutEndUtc = null;
+        Raise(new PasswordResetByAdministrator(Id));
+    }
 
     public void Deactivate() => IsActive = false;
+
+    public void Activate()
+    {
+        IsActive = true;
+        AccessFailedCount = 0;
+        LockoutEndUtc = null;
+    }
+
+    public void BeginMfaEnrollment(string protectedSecret)
+    {
+        if (MfaEnabled)
+        {
+            throw new DomainException(IdentityErrors.MfaAlreadyEnabled);
+        }
+
+        PendingMfaSecretProtected = Guard.NotEmpty(protectedSecret, "identity.mfa-secret-required", "MFA secret");
+    }
+
+    public void ConfirmMfa(IEnumerable<string> recoveryCodeHashes)
+    {
+        if (PendingMfaSecretProtected is null)
+        {
+            throw new DomainException(IdentityErrors.MfaNotEnrolling);
+        }
+
+        MfaSecretProtected = PendingMfaSecretProtected;
+        PendingMfaSecretProtected = null;
+        MfaEnabled = true;
+        RecoveryCodeHashes = recoveryCodeHashes.ToList();
+        Raise(new MfaStatusChanged(Id, true));
+    }
+
+    public void DisableMfa()
+    {
+        if (!MfaEnabled)
+        {
+            throw new DomainException(IdentityErrors.MfaNotEnabled);
+        }
+
+        MfaEnabled = false;
+        MfaSecretProtected = null;
+        PendingMfaSecretProtected = null;
+        MfaLastTimeStep = null;
+        RecoveryCodeHashes = [];
+        Raise(new MfaStatusChanged(Id, false));
+    }
+
+    /// <summary>Accepts a TOTP time step only if it is newer than the last one used (blocks code replay).</summary>
+    public bool AcceptTimeStep(long timeStep)
+    {
+        if (MfaLastTimeStep is { } last && timeStep <= last)
+        {
+            return false;
+        }
+
+        MfaLastTimeStep = timeStep;
+        return true;
+    }
+
+    /// <summary>Consumes a recovery code (single use).</summary>
+    public bool UseRecoveryCode(string codeHash)
+    {
+        if (!RecoveryCodeHashes.Contains(codeHash))
+        {
+            return false;
+        }
+
+        RecoveryCodeHashes = RecoveryCodeHashes.Where(h => h != codeHash).ToList();
+        return true;
+    }
 
     public void SetRoles(IEnumerable<Guid> roleIds)
     {
@@ -343,3 +461,9 @@ public sealed record UserCreated(Guid UserId, string Email) : IDomainEvent;
 public sealed record RolePermissionsChanged(Guid RoleId) : IDomainEvent;
 
 public sealed record SessionRevoked(Guid SessionId, Guid UserId, string Reason) : IDomainEvent;
+
+public sealed record PasswordChanged(Guid UserId) : IDomainEvent;
+
+public sealed record PasswordResetByAdministrator(Guid UserId) : IDomainEvent;
+
+public sealed record MfaStatusChanged(Guid UserId, bool Enabled) : IDomainEvent;

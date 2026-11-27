@@ -4,7 +4,14 @@ using Erp.Infrastructure.Database;
 using Erp.Infrastructure.Numbering;
 using Erp.Infrastructure.Outbox;
 using Erp.Infrastructure.Persistence;
+using Erp.Infrastructure.Notifications;
+using Erp.Infrastructure.Reliability;
+using Erp.Infrastructure.Security;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.Extensions.Options;
 using Erp.Infrastructure.Tenancy;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,6 +36,25 @@ public static class DependencyInjection
         services.AddScoped<AuditChainVerifier>();
         services.AddScoped<ErpDbContextDependencies>();
         services.AddScoped<IDocumentNumberGenerator, DocumentNumberGenerator>();
+        services.AddScoped<IChangeTrackerReset>(sp => sp.GetRequiredService<ErpDbSession>());
+        services.AddScoped<IInbox, SqlInbox>();
+        services.AddScoped<IIdempotencyStore, SqlIdempotencyStore>();
+        services.Replace(ServiceDescriptor.Singleton<ITransientFailureDetector, SqlTransientFailureDetector>());
+
+        // Data Protection keys live in the database so all instances share them and they survive restarts.
+        services.AddDataProtection().SetApplicationName("erp");
+        services.AddSingleton<IConfigureOptions<KeyManagementOptions>>(sp => new ConfigureOptions<KeyManagementOptions>(
+            options => options.XmlRepository = new SqlXmlRepository(sp.GetRequiredService<IConnectionStringProvider>())));
+
+        services.AddOptions<SmtpOptions>().Bind(configuration.GetSection(SmtpOptions.SectionName));
+        if (configuration.GetValue<bool>($"{SmtpOptions.SectionName}:Enabled"))
+        {
+            services.AddSingleton<INotificationSender, SmtpNotificationSender>();
+        }
+        else
+        {
+            services.AddSingleton<INotificationSender, LoggingNotificationSender>();
+        }
 
         services.AddOptions<DatabaseOptions>().Bind(configuration.GetSection(DatabaseOptions.SectionName));
         services.AddOptions<OutboxOptions>().Bind(configuration.GetSection(OutboxOptions.SectionName));

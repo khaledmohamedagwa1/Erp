@@ -103,7 +103,7 @@ public sealed class OutboxProcessor(
             string? error = null;
             try
             {
-                await DispatchAsync(message.TenantId, message.Type, message.Payload, cancellationToken);
+                await DispatchAsync(message.Id, message.TenantId, message.Type, message.Payload, cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -127,12 +127,13 @@ public sealed class OutboxProcessor(
         return batch.Count;
     }
 
-    private async Task DispatchAsync(Guid? tenantId, string typeName, string payload, CancellationToken cancellationToken)
+    private async Task DispatchAsync(Guid messageId, Guid? tenantId, string typeName, string payload, CancellationToken cancellationToken)
     {
         var type = registry.Resolve(typeName) ?? throw new InvalidOperationException($"Unknown event type '{typeName}'.");
         var domainEvent = JsonSerializer.Deserialize(payload, type) ?? throw new InvalidOperationException("Empty event payload.");
 
         await using var scope = scopeFactory.CreateAsyncScope();
+        scope.ServiceProvider.GetRequiredService<IOutboxMessageContext>().Set(messageId);
         if (tenantId is not null)
         {
             scope.ServiceProvider.GetRequiredService<ITenantContext>().SetTenant(tenantId.Value);

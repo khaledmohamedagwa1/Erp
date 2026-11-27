@@ -36,6 +36,7 @@ public static class EndpointFilterExtensions
     public static TBuilder RequireCompany<TBuilder>(this TBuilder builder)
         where TBuilder : IEndpointConventionBuilder
     {
+        builder.WithMetadata(new RequiresCompanyMetadata());
         builder.AddEndpointFilter(async (context, next) =>
         {
             var tenant = context.HttpContext.RequestServices.GetRequiredService<ITenantContext>();
@@ -50,6 +51,7 @@ public static class EndpointFilterExtensions
     public static TBuilder RequireModule<TBuilder>(this TBuilder builder, string moduleCode)
         where TBuilder : IEndpointConventionBuilder
     {
+        builder.WithMetadata(new RequiresCompanyMetadata());
         builder.AddEndpointFilter(async (context, next) =>
         {
             var services = context.HttpContext.RequestServices;
