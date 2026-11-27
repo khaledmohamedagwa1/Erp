@@ -1,6 +1,6 @@
 # Known Limitations
 
-_Last updated: 2026-11-27 (after waves 5–6 of the limitation work; wave 7 — database-per-tenant, integrations, residual gaps, operational testing — in progress; frontend not started)_
+_Last updated: 2026-11-27 (after waves 5–6 of the limitation work; wave 7 — database-per-tenant, integrations, residual gaps, operational testing — not done, see HANDOFF.md; frontend not started)_
 
 Each module document in [docs/modules](docs/modules) lists its own limitations in detail. This page is the cross-module summary — nothing here should be presented as a production feature.
 

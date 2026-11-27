@@ -3,7 +3,7 @@
 Angular + ASP.NET Core + SQL Server · Modular Monolith · Clean Architecture · DDD · Double-Entry Accounting · Cloud SaaS & On-Premises
 
 > **Status: backend implemented and tested for every module (758 automated tests); Angular frontend not started.**
-> See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md), [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) and [backend/README.md](backend/README.md).
+> **Next agent: start with [HANDOFF.md](HANDOFF.md).** See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md), [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) and [backend/README.md](backend/README.md).
 > Business-policy decisions were taken with the recommended defaults — [docs/business/05-decisions-log.md](docs/business/05-decisions-log.md);
 > items marked ⚖️ need review by an accountant / tax adviser before production use.
 
