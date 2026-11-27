@@ -1,0 +1,14 @@
+# Build context is the repository root (images are built from deploy/docker/Dockerfile.*).
+.git
+.github
+.claude
+**/bin
+**/obj
+**/TestResults
+**/.vs
+**/*.user
+**/node_modules
+docs
+deploy/onprem/dist
+deploy/**/secrets
+**/.env

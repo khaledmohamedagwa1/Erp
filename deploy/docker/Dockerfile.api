@@ -1,16 +1,40 @@
-# syntax=docker/dockerfile:1
-# Erp.Api — same image runs as api, worker or all (ERP__ROLE / Erp__Role).
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+# syntax=docker/dockerfile:1.7
+# Erp.Api — one image for every role (Erp__Role=api | worker | all).
+# Build from the repository root:
+#   docker build -f deploy/docker/Dockerfile.api -t erp-api:local .
+# Behind a TLS-inspecting proxy, hand its CA to the build stage only (never baked into the runtime image):
+#   docker build --secret id=cacert,src=/path/to/proxy-ca.crt --build-arg HTTPS_PROXY=... -f deploy/docker/Dockerfile.api .
+
+ARG DOTNET_VERSION=10.0
+
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS build
+# Optional extra CA for corporate/sandbox proxies. A no-op when the secret is not provided.
+RUN --mount=type=secret,id=cacert,required=false \
+    if [ -s /run/secrets/cacert ]; then \
+      cp /run/secrets/cacert /usr/local/share/ca-certificates/build-proxy-ca.crt && update-ca-certificates >/dev/null; \
+    fi
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 WORKDIR /src
 COPY backend/ ./
 RUN dotnet restore src/Host/Erp.Api/Erp.Api.csproj
 RUN dotnet publish src/Host/Erp.Api/Erp.Api.csproj -c Release -o /app --no-restore /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS runtime
+LABEL org.opencontainers.image.title="erp-api" \
+      org.opencontainers.image.description="Modular ERP API (roles: api, worker, all)" \
+      org.opencontainers.image.source="https://github.com/khaledmohamedagwa1/Erp"
 WORKDIR /app
-ENV ASPNETCORE_URLS=http://+:8080 \
-    DOTNET_RUNNING_IN_CONTAINER=true
+# Read-only root filesystem friendly: nothing is written under /app; .NET temp files go to /tmp (mount a tmpfs there).
+ENV ASPNETCORE_HTTP_PORTS=8080 \
+    DOTNET_RUNNING_IN_CONTAINER=true \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_gcServer=0 \
+    Erp__Role=all
 COPY --from=build /app ./
+# Non-root user provided by the base image (UID 1654).
 USER $APP_UID
 EXPOSE 8080
+# No curl/wget in the image: the app probes its own readiness endpoint.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD ["dotnet", "Erp.Api.dll", "--healthcheck"]
 ENTRYPOINT ["dotnet", "Erp.Api.dll"]

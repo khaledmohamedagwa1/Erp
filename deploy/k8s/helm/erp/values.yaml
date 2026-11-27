@@ -1,0 +1,137 @@
+# Default values for the ERP chart. No secrets belong in this file: create the Secret named in
+# secrets.existingSecret yourself (or with External Secrets / Sealed Secrets / CSI) before installing.
+
+image:
+  registry: ghcr.io
+  repository: khaledmohamedagwa1/erp-api
+  # Defaults to .Chart.AppVersion. Prefer an immutable digest in production: tag: "" + digest: "sha256:..."
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+migrator:
+  image:
+    registry: ghcr.io
+    repository: khaledmohamedagwa1/erp-migrator
+    tag: ""
+    digest: ""
+
+# Secret with one key per sensitive setting. Mounted as files under /run/secrets (key-per-file configuration):
+#   ConnectionStrings__Erp   (required)  ADO.NET connection string
+#   Auth__SigningKeyPem      (required)  PEM RSA private key for access tokens
+#   Platform__ApiKey         (optional)  >= 32 characters; enables the platform provisioning endpoint
+secrets:
+  existingSecret: erp-secrets
+
+# Schema migrations are an explicit, approved step (ADR-015). When enabled, a pre-install/pre-upgrade hook Job runs
+# `migrate` before new pods start; destructive changes still fail unless allowDestructive is set for that release.
+migrations:
+  enabled: false
+  allowDestructive: false
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+
+# Public origin of the web client (CORS + cookies). Must be https outside Development.
+publicOrigins:
+  - https://erp.example.com
+
+config:
+  environment: Production
+  logLevel: Information
+  # X-Forwarded-* is trusted only from these networks (the ingress controller's pod network).
+  trustForwardedHeaders: true
+  knownNetworks:
+    - 10.0.0.0/8
+  maxRequestBodyBytes: 10485760
+  outboxLagDegradedSeconds: 300
+  outboxLagUnhealthySeconds: 1800
+  # Extra non-secret settings as environment variables, e.g. { "RateLimiting__AuthPerMinute": "30" }
+  extraEnv: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1654
+  runAsGroup: 1654
+  fsGroup: 1654
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+api:
+  replicaCount: 2
+  resources:
+    requests: { cpu: 250m, memory: 384Mi }
+    limits: { memory: 1Gi }
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  podAnnotations: {}
+
+worker:
+  # The outbox dispatcher is safe to run on several replicas (rows are claimed), but one is enough for most sites.
+  replicaCount: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 768Mi }
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+probes:
+  startup: { periodSeconds: 5, failureThreshold: 30, timeoutSeconds: 3 }
+  liveness: { periodSeconds: 20, failureThreshold: 3, timeoutSeconds: 3 }
+  readiness: { periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 5 }
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: erp.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: erp-tls
+      hosts: [erp.example.com]
+  # The platform provisioning API should not be public; block it at the edge when your controller supports it.
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountToken: false
+
+networkPolicy:
+  # Restricts ingress to the API pods to the ingress controller namespace; egress is left open (SQL, SMTP).
+  enabled: false
+  ingressControllerNamespace: ingress-nginx

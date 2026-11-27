@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "erp.fullname" . }}
+  labels:
+    {{- include "erp.labels" . | nindent 4 }}
+data:
+  ASPNETCORE_ENVIRONMENT: {{ .Values.config.environment | quote }}
+  ASPNETCORE_HTTP_PORTS: "8080"
+  Database__AutoMigrate: "false"
+  Auth__SecureCookies: "true"
+  Serilog__MinimumLevel__Default: {{ .Values.config.logLevel | quote }}
+  Hosting__TrustForwardedHeaders: {{ .Values.config.trustForwardedHeaders | quote }}
+  Hosting__MaxRequestBodyBytes: {{ .Values.config.maxRequestBodyBytes | int64 | quote }}
+  Hosting__OutboxLagDegradedSeconds: {{ .Values.config.outboxLagDegradedSeconds | quote }}
+  Hosting__OutboxLagUnhealthySeconds: {{ .Values.config.outboxLagUnhealthySeconds | quote }}
+  {{- range $i, $network := .Values.config.knownNetworks }}
+  Hosting__KnownNetworks__{{ $i }}: {{ $network | quote }}
+  {{- end }}
+  {{- range $i, $origin := required "publicOrigins must list at least one https origin" .Values.publicOrigins }}
+  Hosting__CorsAllowedOrigins__{{ $i }}: {{ $origin | quote }}
+  {{- end }}
+  {{- range $key, $value := .Values.config.extraEnv }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

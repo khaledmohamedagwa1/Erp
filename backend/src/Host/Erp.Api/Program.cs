@@ -15,7 +15,9 @@ using Erp.Modules.Identity.Infrastructure;
 using Erp.Modules.Organization.Infrastructure;
 using Erp.Modules.Parties.Infrastructure;
 using Erp.Modules.Workflow.Infrastructure;
+using Erp.Application.Observability;
 using Erp.Web;
+using Erp.Web.Hosting;
 using Erp.Web.Modules;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
@@ -24,7 +26,19 @@ using OpenTelemetry.Trace;
 using Serilog;
 using Serilog.Formatting.Compact;
 
+// Container health probe: `dotnet Erp.Api.dll --healthcheck` checks the running instance and exits 0/1.
+if (args.Contains(ErpHealthProbe.Argument))
+{
+    return await ErpHealthProbe.RunAsync();
+}
+
 var builder = WebApplication.CreateBuilder(args);
+
+// Secret files (Docker/Kubernetes secrets): /run/secrets/Auth__SigningKeyPem becomes Auth:SigningKeyPem.
+builder.Configuration.AddKeyPerFile(Environment.GetEnvironmentVariable("ERP_SECRETS_DIR") ?? "/run/secrets", optional: true);
+
+// No-op unless the process is started by the Windows Service Control Manager (on-prem Windows installs).
+builder.Host.UseWindowsService();
 
 // ---- Logging: structured JSON outside Development ----
 builder.Services.AddSerilog((services, logger) =>
@@ -51,6 +65,8 @@ if (role is "worker" or "all")
     builder.Services.AddHostedService<OutboxBackgroundService>();
 }
 
+builder.Services.AddErpHosting(builder.Configuration, role);
+
 builder.Services.AddErpOpenApi();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
 builder.Services.AddRateLimiter(options =>
@@ -67,11 +83,14 @@ if (!string.IsNullOrWhiteSpace(otlp))
     builder.Services.AddOpenTelemetry()
         .ConfigureResource(r => r.AddService("erp-api"))
         .WithTracing(t => t.AddAspNetCoreInstrumentation().AddOtlpExporter())
-        .WithMetrics(m => m.AddAspNetCoreInstrumentation().AddOtlpExporter());
+        .WithMetrics(m => m.AddAspNetCoreInstrumentation().AddMeter(ErpMetrics.MeterName).AddOtlpExporter());
 }
 
 var app = builder.Build();
+ErpProductionChecks.ThrowIfInvalid(app.Configuration, app.Environment);
 
+app.UseErpHosting();
+app.UseErpRequestLogging();
 app.UseErpRequestPipeline();
 app.UseRateLimiter();
 
@@ -95,6 +114,7 @@ if (app.Services.GetRequiredService<IOptions<DatabaseOptions>>().Value.AutoMigra
 }
 
 await app.RunAsync();
+return 0;
 
 /// <summary>Entry point marker for integration tests (WebApplicationFactory).</summary>
 public partial class Program;
