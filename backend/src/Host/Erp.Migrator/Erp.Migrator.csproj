@@ -12,6 +12,7 @@
     <ProjectReference Include="../../Modules/Catalog/Erp.Modules.Catalog.Infrastructure/Erp.Modules.Catalog.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Accounting/Erp.Modules.Accounting.Infrastructure/Erp.Modules.Accounting.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Finance/Erp.Modules.Finance.Infrastructure/Erp.Modules.Finance.Infrastructure.csproj" />
+    <ProjectReference Include="../../Modules/Sales/Erp.Modules.Sales.Infrastructure/Erp.Modules.Sales.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Inventory/Erp.Modules.Inventory.Infrastructure/Erp.Modules.Inventory.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Workflow/Erp.Modules.Workflow.Infrastructure/Erp.Modules.Workflow.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Manufacturing/Erp.Modules.Manufacturing.Infrastructure/Erp.Modules.Manufacturing.Infrastructure.csproj" />
