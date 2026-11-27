@@ -24,6 +24,8 @@ public interface IAccountingDbContext
 
     DbSet<AccountBalance> AccountBalances { get; }
 
+    DbSet<OpeningBalance> OpeningBalances { get; }
+
     Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry Entry(object entity);
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
@@ -59,7 +61,8 @@ public sealed record PostablePeriod(FiscalYear Year, FiscalPeriod Period);
 /// <summary>Finds the fiscal period for a date and decides whether the current caller may post into it.</summary>
 public sealed class PeriodGuard(IAccountingDbContext db, ICurrentUser currentUser, IPermissionService permissions) : IPeriodGuard
 {
-    public async Task<Result<PostablePeriod>> FindPostablePeriodAsync(Guid legalEntityId, DateOnly date, CancellationToken cancellationToken)
+    /// <param name="allowSoftClosed">Year-end close: the closing entry is posted into the soft-closed last period by the system.</param>
+    public async Task<Result<PostablePeriod>> FindPostablePeriodAsync(Guid legalEntityId, DateOnly date, CancellationToken cancellationToken, bool allowSoftClosed = false)
     {
         var year = await db.FiscalYears.Include(y => y.Periods)
             .FirstOrDefaultAsync(y => y.LegalEntityId == legalEntityId && y.StartDate <= date && y.EndDate >= date, cancellationToken);
@@ -72,6 +75,7 @@ public sealed class PeriodGuard(IAccountingDbContext db, ICurrentUser currentUse
         switch (period.Status)
         {
             case PeriodStatus.Open:
+            case PeriodStatus.SoftClosed when allowSoftClosed:
                 return new PostablePeriod(year, period);
             case PeriodStatus.SoftClosed when currentUser.UserId is { } userId &&
                                               await permissions.HasPermissionAsync(userId, AccountingPermissions.PostInSoftClosedPeriod, cancellationToken):
@@ -104,7 +108,7 @@ public sealed class JournalPoster(
     public const string NumberDocumentType = "JournalEntry";
     public const string NumberPrefix = "JV";
 
-    public async Task<Result> PostDraftAsync(JournalEntry journal, bool manual, CancellationToken cancellationToken)
+    public async Task<Result> PostDraftAsync(JournalEntry journal, bool manual, CancellationToken cancellationToken, bool allowSoftClosed = false)
     {
         if (!unitOfWork.HasActiveTransaction)
         {
@@ -145,7 +149,7 @@ public sealed class JournalPoster(
             journal.AddRoundingLine(rule.AccountId);
         }
 
-        var period = await periods.FindPostablePeriodAsync(journal.LegalEntityId, journal.JournalDate, cancellationToken);
+        var period = await periods.FindPostablePeriodAsync(journal.LegalEntityId, journal.JournalDate, cancellationToken, allowSoftClosed);
         if (period.IsFailure)
         {
             return period.Error;
@@ -171,7 +175,7 @@ public sealed class JournalPoster(
     }
 
     /// <summary>Posts the reversal of a posted journal and marks the original reversed. Idempotent.</summary>
-    public async Task<Result<JournalEntry>> ReverseAsync(JournalEntry original, DateOnly reversalDate, CancellationToken cancellationToken)
+    public async Task<Result<JournalEntry>> ReverseAsync(JournalEntry original, DateOnly reversalDate, CancellationToken cancellationToken, bool allowSoftClosed = false)
     {
         var reversalPurpose = original.Purpose + JournalEntry.ReversalSuffix;
         var existing = await db.Journals.Include(j => j.Lines).FirstOrDefaultAsync(j =>
@@ -193,7 +197,10 @@ public sealed class JournalPoster(
         }
 
         db.Journals.Add(reversal);
-        var posted = await PostDraftAsync(reversal, original.SourceModule == SourceModules.Accounting, cancellationToken);
+        // Accounting's own system documents (opening balances, year-end close) reverse like module postings: they may touch
+        // accounts that manual journals cannot.
+        var manual = original.SourceModule == SourceModules.Accounting && original.SourceDocType == AccountingDocumentTypes.ManualJournal;
+        var posted = await PostDraftAsync(reversal, manual, cancellationToken, allowSoftClosed);
         if (posted.IsFailure)
         {
             Detach(db, reversal);
@@ -396,6 +403,8 @@ public sealed class LedgerQueries(IAccountingDbContext db) : ILedgerQueries
         {
             AccountId = line.AccountId,
             JournalId = journal.Id,
+            SourceDocType = journal.SourceDocType,
+            CostCenterId = line.CostCenterId,
             Number = journal.Number,
             JournalDate = journal.JournalDate,
             JournalDescription = journal.Description,
@@ -412,6 +421,10 @@ public sealed class LedgerRow
     public Guid AccountId { get; init; }
 
     public Guid JournalId { get; init; }
+
+    public string SourceDocType { get; init; } = string.Empty;
+
+    public Guid? CostCenterId { get; init; }
 
     public string? Number { get; init; }
 

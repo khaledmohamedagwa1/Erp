@@ -77,6 +77,26 @@ public static class GenericChartTemplate
         new("5730", "5", "Applied overhead (production)", "تكاليف غير مباشرة محملة على الإنتاج", AccountType.Expense, true),
     ];
 
+    /// <summary>
+    /// Cash-flow categories of the template's balance-sheet posting accounts. Accounts not listed are working-capital items
+    /// (operating). Accumulated depreciation is operating on purpose: in the indirect method its increase is the depreciation add-back.
+    /// Opening balance equity is financing (owners' funding of the opening position).
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, CashFlowCategory> CashFlowCategories = new Dictionary<string, CashFlowCategory>(StringComparer.Ordinal)
+    {
+        ["1110"] = CashFlowCategory.Cash,
+        ["1120"] = CashFlowCategory.Cash,
+        ["1510"] = CashFlowCategory.Investing,
+        ["3100"] = CashFlowCategory.Financing,
+        ["3200"] = CashFlowCategory.Financing,
+        ["3300"] = CashFlowCategory.Financing,
+    };
+
+    public static CashFlowCategory CategoryFor(TemplateAccount account) =>
+        account.Type is AccountType.Revenue or AccountType.Expense || !account.Posting
+            ? CashFlowCategory.None
+            : CashFlowCategories.GetValueOrDefault(account.Code, CashFlowCategory.Operating);
+
     public static readonly IReadOnlyDictionary<string, string> RoleAccounts = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         [PostingRoles.CustomerReceivable] = "1210",

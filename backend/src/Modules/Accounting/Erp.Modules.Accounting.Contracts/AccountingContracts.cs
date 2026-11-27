@@ -89,6 +89,18 @@ public static class AccountingPermissions
     public const string JournalPost = "accounting.journal.post";
     public const string JournalReverse = "accounting.journal.reverse";
     public const string ReportRead = "accounting.report.read";
+    public const string OpeningBalanceManage = "accounting.opening-balance.manage";
+    public const string YearEndClose = "accounting.year-end.close";
+}
+
+/// <summary>Source document types of journals created by the Accounting module itself.</summary>
+public static class AccountingDocumentTypes
+{
+    public const string ManualJournal = "ManualJournal";
+    public const string OpeningBalance = "OpeningBalance";
+
+    /// <summary>Year-end closing entries. Excluded from income statements and cash-flow statements.</summary>
+    public const string YearEndClose = "YearEndClose";
 }
 
 /// <summary>Determination context: optional keys that let a posting rule pick a more specific account.</summary>

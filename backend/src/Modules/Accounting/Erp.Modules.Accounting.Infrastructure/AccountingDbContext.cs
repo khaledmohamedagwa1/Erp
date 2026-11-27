@@ -28,6 +28,12 @@ public sealed class AccountingDbContext(DbContextOptions<AccountingDbContext> op
 
     public DbSet<AccountBalance> AccountBalances => Set<AccountBalance>();
 
+    public DbSet<OpeningBalance> OpeningBalances => Set<OpeningBalance>();
+
+    /// <summary>Database triggers that make posted journals immutable (see migration PostedJournalImmutability).</summary>
+    public const string JournalEntryTrigger = "TR_JournalEntry_Immutable";
+    public const string JournalLineTrigger = "TR_JournalLine_Immutable";
+
     protected override void ConfigureModel(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Account>(b =>
@@ -41,7 +47,9 @@ public sealed class AccountingDbContext(DbContextOptions<AccountingDbContext> op
             b.Property(x => x.Type).HasConversion<string>().HasMaxLength(20);
             b.Property(x => x.ControlSubledger).HasConversion<string>().HasMaxLength(20);
             b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            b.Property(x => x.CashFlowCategory).HasConversion<string>().HasMaxLength(20);
             b.Ignore(x => x.IsControl);
+            b.Ignore(x => x.IsBalanceSheet);
             b.Ignore(x => x.NormalBalance);
             b.HasIndex(TenantIdProperty, nameof(Account.CompanyId), nameof(Account.Code)).IsUnique();
             b.HasOne<Account>().WithMany().HasForeignKey(x => x.ParentId).OnDelete(DeleteBehavior.NoAction);
@@ -65,6 +73,8 @@ public sealed class AccountingDbContext(DbContextOptions<AccountingDbContext> op
             b.Property(x => x.Id).ValueGeneratedNever();
             b.Property(x => x.Code).HasMaxLength(20).IsRequired();
             b.Ignore(x => x.NumberingYear);
+            b.Ignore(x => x.LastPeriod);
+            b.Property(x => x.ClosedAtUtc).HasPrecision(3);
             b.HasIndex(TenantIdProperty, nameof(FiscalYear.LegalEntityId), nameof(FiscalYear.StartDate)).IsUnique();
             b.HasMany(x => x.Periods).WithOne().HasForeignKey(x => x.FiscalYearId).OnDelete(DeleteBehavior.Cascade);
             b.Navigation(x => x.Periods).UsePropertyAccessMode(PropertyAccessMode.Field);
@@ -98,6 +108,9 @@ public sealed class AccountingDbContext(DbContextOptions<AccountingDbContext> op
             b.Ignore(x => x.TotalBaseDebit);
             b.Ignore(x => x.TotalBaseCredit);
             b.Ignore(x => x.BaseImbalance);
+
+            // Tell EF the table has triggers so it does not use OUTPUT clauses (incompatible with triggers).
+            b.ToTable(t => t.HasTrigger(JournalEntryTrigger));
             // One journal per source document and purpose: makes module postings idempotent.
             b.HasIndex(TenantIdProperty, nameof(JournalEntry.LegalEntityId), nameof(JournalEntry.SourceDocType), nameof(JournalEntry.SourceDocId), nameof(JournalEntry.Purpose)).IsUnique();
             b.HasIndex(TenantIdProperty, nameof(JournalEntry.LegalEntityId), nameof(JournalEntry.Number)).IsUnique().HasFilter("[Number] IS NOT NULL");
@@ -120,7 +133,38 @@ public sealed class AccountingDbContext(DbContextOptions<AccountingDbContext> op
             b.HasIndex(x => x.AccountId);
             b.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.NoAction);
             b.HasOne<CostCenter>().WithMany().HasForeignKey(x => x.CostCenterId).OnDelete(DeleteBehavior.NoAction);
-            b.ToTable(t => t.HasCheckConstraint("CK_JournalLine_NonNegative", "[Debit] >= 0 AND [Credit] >= 0 AND [BaseDebit] >= 0 AND [BaseCredit] >= 0"));
+            b.ToTable(t =>
+            {
+                t.HasCheckConstraint("CK_JournalLine_NonNegative", "[Debit] >= 0 AND [Credit] >= 0 AND [BaseDebit] >= 0 AND [BaseCredit] >= 0");
+                t.HasTrigger(JournalLineTrigger);
+            });
+        });
+
+        modelBuilder.Entity<OpeningBalance>(b =>
+        {
+            b.ToTable("OpeningBalance");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.Description).HasMaxLength(500).IsRequired();
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            b.Ignore(x => x.TotalDebit);
+            b.Ignore(x => x.TotalCredit);
+            b.Ignore(x => x.EquityDifference);
+            // At most one posted opening per legal entity, enforced by the database too (concurrent posts).
+            b.HasIndex(TenantIdProperty, nameof(OpeningBalance.LegalEntityId)).IsUnique().HasFilter("[Status] = 'Posted'");
+            b.HasMany(x => x.Lines).WithOne().HasForeignKey(x => x.OpeningBalanceId).OnDelete(DeleteBehavior.Cascade);
+            b.Navigation(x => x.Lines).UsePropertyAccessMode(PropertyAccessMode.Field);
+        });
+
+        modelBuilder.Entity<OpeningBalanceLine>(b =>
+        {
+            b.ToTable("OpeningBalanceLine");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+            b.Property(x => x.Debit).HasPrecision(19, 4);
+            b.Property(x => x.Credit).HasPrecision(19, 4);
+            b.Property(x => x.Description).HasMaxLength(300);
+            b.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<AccountDetermination>(b =>

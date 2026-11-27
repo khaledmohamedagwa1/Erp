@@ -95,15 +95,94 @@ await postingService.PostAsync(new JournalRequest(legalEntityId, invoiceDate, So
 | `POST /journals/{id}/reverse` | accounting.journal.reverse | `{reversalDate}`. Only manual journals; module journals are reversed by cancelling their source document (`accounting.reverse-from-source-document`). |
 | `GET /reports/trial-balance?legalEntityId&from&to` | accounting.report.read | Opening, period debit/credit, closing per account; `isBalanced`. From posted journal lines only. |
 | `GET /reports/general-ledger?legalEntityId&accountId&from&to` | accounting.report.read | Opening balance, lines with running balance, closing. |
+| `PUT /accounts/{id}/cash-flow-category` | accounting.account.manage | `{category: None | Operating | Investing | Financing | Cash}`; balance-sheet accounts only (`accounting.cash-flow-category-balance-sheet-only`). Optional `cashFlowCategory` on `POST /accounts`; new balance-sheet posting accounts default to Operating. |
+| `GET /reports/income-statement?legalEntityId&from&to&compareFrom?&compareTo?&costCenterId?` | accounting.report.read | Sections revenue / cost-of-sales / other-income / operating-expenses; `netRevenue`, `grossProfit`, `netProfit`, each with `amount`, `ytd` (fiscal-year start to `to`) and `comparative`. |
+| `GET /reports/balance-sheet?legalEntityId&asOf&compareAsOf?` | accounting.report.read | Assets, liabilities, equity (incl. "Current and unclosed earnings"); `isBalanced`. |
+| `GET /reports/cash-flow?legalEntityId&from&to` | accounting.report.read | Indirect method: net profit, operating adjustments, investing, financing, opening/closing cash, `reconciles`. |
+| `GET /reports/{trial-balance|income-statement|balance-sheet|cash-flow}.csv` | accounting.report.read | Same parameters as the JSON reports. UTF-8 with BOM, RFC 4180 quoting, invariant-culture amounts. |
+| `POST /fiscal-years/{id}/close` | accounting.year-end.close | Year-end close (below). Idempotent. |
+| `POST /fiscal-years/{id}/reopen` | year-end.close + period.manage | Reverses the closing journal; last period back to soft-closed. |
+| `GET /opening-balances?legalEntityId` | accounting.journal.read | |
+| `POST /opening-balances` | accounting.opening-balance.manage | `{legalEntityId, openingDate, description?, lines:[{accountId, debit, credit, description?}]}`; control accounts refused (`accounting.opening-control-account`). |
+| `POST /opening-balances/{id}/post` | accounting.opening-balance.manage | One posted document per legal entity (`accounting.opening-balance-exists`). |
+| `POST /opening-balances/{id}/reverse` | accounting.opening-balance.manage | `{reversalDate}` (open period). |
+| `GET /readiness?legalEntityId&roles?` | accounting.account.read | `{missingRoles, hasChartOfAccounts, hasFiscalYearForToday, todayPeriodStatus, isReady}`. `roles` = comma-separated subset (default: all roles). |
+
+## Financial statements (Part 12.9)
+
+All statements are computed **only from posted journal lines** (status Posted or Reversed — a reversal is itself a posted
+journal, so the pair nets to zero), in the legal entity's functional currency.
+
+* **Income statement.** Revenue accounts that posting rules map to `SalesRevenue`, `SalesReturns`, `SalesDiscount` or
+  `ServiceRevenue` form *revenue*; expense accounts mapped to `CostOfGoodsSold`, `PurchasePriceVariance`, `CostTrueUp`,
+  `ProductionVariance` or `AbnormalScrap` form *cost of sales*. Other revenue accounts are *other income*, other expense accounts
+  *operating expenses*. Gross profit = revenue − cost of sales; net profit = gross profit + other income − operating expenses.
+  Year-end closing journals are excluded. The cost-centre filter applies to the income statement only (balance sheets are not
+  kept per cost centre).
+* **Balance sheet** "as of" a date uses cumulative balances since inception, so balance-sheet accounts carry forward across
+  fiscal years without any opening entry. Revenue/expense balances not yet closed appear in equity as
+  *Current and unclosed earnings*; after the year-end close they are in retained earnings instead. Assets = liabilities + equity
+  always holds because every posted journal balances.
+* **Cash flow (indirect).** Net profit, then each balance-sheet account's movement with the sign flipped (a rise in a non-cash
+  asset uses cash; a rise in a liability or equity provides it), grouped by the account's **cash-flow category**: Operating (and
+  unclassified `None` accounts, so the statement always ties), Investing, Financing. `Cash` accounts are the ones explained.
+  Year-end closing journals are excluded (they are non-cash and net to zero). The generic chart sets: 1110/1120 Cash, 1510
+  Investing, 3100/3200/3300 Financing, every other balance-sheet posting account Operating — accumulated depreciation is operating
+  on purpose: its increase is the depreciation add-back.
+
+## Year-end close (OQ-ACC-4)
+
+`POST /fiscal-years/{id}/close`:
+
+1. Earlier fiscal years of the legal entity must already be closed (`accounting.earlier-year-open`).
+2. **Precondition (decision):** periods 1…n−1 are **Closed** and the last period is **Soft-closed** (`accounting.year-end-periods-not-ready`).
+   The closing entry is dated on the last day, so that period must still accept a system posting, while soft-close keeps ordinary
+   users out. The close posts there regardless of the user's soft-close permission.
+3. One journal (`SourceDocType = YearEndClose`, source id = fiscal year, purpose `close-{n}`) brings every revenue and expense
+   balance of the year — per account and cost centre — to zero; the net goes to the `RetainedEarnings` role. A year without
+   revenue/expense balances is closed without a journal.
+4. The last period becomes Closed and the year is marked closed: no postings, and period status changes are refused
+   (`accounting.fiscal-year-closed`) until it is reopened.
+5. Running it again returns the existing result.
+
+`POST /fiscal-years/{id}/reopen` (needs `accounting.year-end.close` **and** `accounting.period.manage`; refused when a later year
+is closed): sets the last period back to Soft-closed and posts the reversal of the closing journal on the last day. A later close
+posts a new journal with the next purpose number (`close-2`, …) because the (source, purpose) key is unique.
+
+Inactive revenue/expense accounts that still carry a balance block the close (`accounting.account-inactive`): reactivate them first.
+
+## Opening balances
+
+`OpeningBalance` documents enter the general-ledger position when a legal entity starts using the system. Posting creates one
+journal (`SourceDocType = OpeningBalance`, purpose `opening`) on the opening date; the difference between the lines goes to the
+`OpeningBalanceEquity` role. **Control accounts are refused**: receivable/payable openings must be posted by the Finance module
+(with party references) and inventory openings by the Inventory module (with quantities and cost), both through
+`IJournalPostingService` with their own source module, so each sub-ledger agrees with its control account. Only one posted
+document per legal entity (also a filtered unique index); reverse it to replace it.
+
+## Database-level immutability
+
+Migration `StatementsYearEndOpeningBalances` adds two triggers:
+
+* `accounting.TR_JournalLine_Immutable` — no UPDATE or DELETE of lines whose journal is Posted or Reversed (drafts stay editable).
+* `accounting.TR_JournalEntry_Immutable` — posted/reversed journals cannot be deleted; the only permitted header change is
+  Posted → Reversed with the reversal link (audit stamps and rowversion may change). Any other column change raises error 51003.
+
+EF Core is told about the triggers (`HasTrigger`) so it does not use OUTPUT clauses on these tables.
 
 ## Data model
 
 `Account`, `CostCenter`, `FiscalYear` → `FiscalPeriod`, `JournalEntry` → `JournalLine`, `AccountDetermination` (posting rules),
 `AccountBalance` (running totals per legal entity/account/period/cost centre/currency, upserted with `UPDLOCK, HOLDLOCK` in the posting
-transaction, locks taken in account order). All tables carry `TenantId` and are covered by row-level security.
+transaction, locks taken in account order), `OpeningBalance` → `OpeningBalanceLine`. `FiscalYear` carries `IsClosed`,
+`ClosingJournalId`, `ClosedAtUtc`; `Account` carries `CashFlowCategory`. All tables carry `TenantId` and are covered by row-level security.
 The posting rule set is the company's collection of `AccountDetermination` rows (no separate rule-set aggregate).
+
+Contract additions (additive only): `AccountingPermissions.OpeningBalanceManage`, `AccountingPermissions.YearEndClose`,
+`AccountingDocumentTypes` (ManualJournal, OpeningBalance, YearEndClose). No existing contract signature changed.
 
 ## Not yet implemented
 
-Year-end closing entry, month-end FX revaluation (OQ-ACC-4/5), opening-balance import, multi-currency balances reporting,
-and database-level prevention of UPDATE/DELETE on posted lines (immutability is enforced by the domain and API).
+Month-end unrealized FX revaluation of open foreign-currency items (OQ-ACC-5 — belongs with the Finance open items),
+multi-currency balance reporting, statements consolidated across legal entities, and a recost of statements when posting rules
+change (statements classify accounts by the *current* posting rules).

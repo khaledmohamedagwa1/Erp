@@ -21,6 +21,8 @@ public sealed record PeriodStatusRequest(string Status);
 
 public sealed record ReverseRequest(DateOnly ReversalDate);
 
+public sealed record CashFlowCategoryRequest(string Category);
+
 public sealed class AccountingModule : IErpModule
 {
     public ModuleManifest Manifest { get; } = new(
@@ -40,7 +42,9 @@ public sealed class AccountingModule : IErpModule
             new(AccountingPermissions.JournalCreate, "accounting", "Create manual journal drafts", "إنشاء مسودات القيود اليدوية"),
             new(AccountingPermissions.JournalPost, "accounting", "Post manual journals", "ترحيل القيود اليدوية", IsSensitive: true),
             new(AccountingPermissions.JournalReverse, "accounting", "Reverse manual journals", "عكس القيود اليدوية", IsSensitive: true),
-            new(AccountingPermissions.ReportRead, "accounting", "View trial balance and ledgers", "عرض ميزان المراجعة ودفتر الأستاذ"),
+            new(AccountingPermissions.ReportRead, "accounting", "View trial balance, ledgers and financial statements", "عرض ميزان المراجعة ودفتر الأستاذ والقوائم المالية"),
+            new(AccountingPermissions.OpeningBalanceManage, "accounting", "Enter, post and reverse general-ledger opening balances", "إدخال وترحيل وعكس الأرصدة الافتتاحية", IsSensitive: true),
+            new(AccountingPermissions.YearEndClose, "accounting", "Run and undo the year-end close", "تنفيذ وإلغاء إقفال السنة المالية", IsSensitive: true),
         ],
         Menu:
         [
@@ -48,6 +52,8 @@ public sealed class AccountingModule : IErpModule
             new("accounting.journals", "Journal entries", "القيود اليومية", "/accounting/journals", "accounting", 20, AccountingPermissions.JournalRead),
             new("accounting.periods", "Fiscal periods", "الفترات المالية", "/accounting/periods", "accounting", 30, AccountingPermissions.PeriodManage),
             new("accounting.trial-balance", "Trial balance", "ميزان المراجعة", "/accounting/reports/trial-balance", "accounting", 40, AccountingPermissions.ReportRead),
+            new("accounting.statements", "Financial statements", "القوائم المالية", "/accounting/reports/statements", "accounting", 50, AccountingPermissions.ReportRead),
+            new("accounting.opening-balances", "Opening balances", "الأرصدة الافتتاحية", "/accounting/opening-balances", "accounting", 60, AccountingPermissions.OpeningBalanceManage),
         ]);
 
     public void AddServices(IServiceCollection services, IConfiguration configuration)
@@ -62,6 +68,7 @@ public sealed class AccountingModule : IErpModule
         services.AddScoped<LedgerQueries>();
         services.AddScoped<ILedgerQueries>(sp => sp.GetRequiredService<LedgerQueries>());
         services.AddScoped<CompanyLegalEntities>();
+        services.AddScoped<FinancialStatementService>();
         services.AddHandlersFromAssembly(typeof(IAccountingDbContext).Assembly);
         services.AddSingleton(new EventAssembly(typeof(Domain.JournalEntry).Assembly));
     }
@@ -78,6 +85,9 @@ public sealed class AccountingModule : IErpModule
             .RequirePermission(AccountingPermissions.AccountManage);
         g.MapPut("/accounts/{id:guid}", async (Guid id, UpdateAccountRequest body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new UpdateAccountCommand(id, body.NameEn, body.NameAr, body.AllowManualPosting), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.AccountManage);
+        g.MapPut("/accounts/{id:guid}/cash-flow-category", async (Guid id, CashFlowCategoryRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new SetAccountCashFlowCategoryCommand(id, body.Category), ct)).ToHttpResult())
             .RequirePermission(AccountingPermissions.AccountManage);
         g.MapPost("/accounts/{id:guid}/deactivate", async (Guid id, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new SetAccountActiveCommand(id, false), ct)).ToHttpResult())
@@ -99,6 +109,33 @@ public sealed class AccountingModule : IErpModule
         g.MapPut("/periods/{id:guid}/status", async (Guid id, PeriodStatusRequest body, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new SetPeriodStatusCommand(id, body.Status), ct)).ToHttpResult())
             .RequirePermission(AccountingPermissions.PeriodManage);
+        g.MapPost("/fiscal-years/{id:guid}/close", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new CloseFiscalYearCommand(id), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.YearEndClose);
+        g.MapPost("/fiscal-years/{id:guid}/reopen", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ReopenFiscalYearCommand(id), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.YearEndClose)
+            .RequirePermission(AccountingPermissions.PeriodManage);
+
+        // Opening balances
+        g.MapGet("/opening-balances", async (Guid? legalEntityId, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ListOpeningBalancesQuery(legalEntityId), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.JournalRead);
+        g.MapPost("/opening-balances", async (CreateOpeningBalanceCommand body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(body, ct)).ToHttpResult(o => Results.Created($"/api/v1/accounting/opening-balances/{o.Id}", o)))
+            .RequirePermission(AccountingPermissions.OpeningBalanceManage);
+        g.MapPost("/opening-balances/{id:guid}/post", async (Guid id, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new PostOpeningBalanceCommand(id), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.OpeningBalanceManage);
+        g.MapPost("/opening-balances/{id:guid}/reverse", async (Guid id, ReverseRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new ReverseOpeningBalanceCommand(id, body.ReversalDate), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.OpeningBalanceManage);
+
+        // Readiness
+        g.MapGet("/readiness", async (Guid legalEntityId, string? roles, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new AccountingReadinessQuery(legalEntityId,
+                    string.IsNullOrWhiteSpace(roles) ? null : roles.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.AccountRead);
 
         // Cost centres and posting rules
         g.MapGet("/cost-centers", async (IDispatcher d, CancellationToken ct) => (await d.Send(new ListCostCentersQuery(), ct)).ToHttpResult())
@@ -138,5 +175,34 @@ public sealed class AccountingModule : IErpModule
         g.MapGet("/reports/general-ledger", async (Guid legalEntityId, Guid accountId, DateOnly from, DateOnly to, IDispatcher d, CancellationToken ct) =>
                 (await d.Send(new GeneralLedgerQuery(legalEntityId, accountId, from, to), ct)).ToHttpResult())
             .RequirePermission(AccountingPermissions.ReportRead);
+        g.MapGet("/reports/income-statement", async (Guid legalEntityId, DateOnly from, DateOnly to, DateOnly? compareFrom, DateOnly? compareTo, Guid? costCenterId,
+                IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new IncomeStatementQuery(legalEntityId, from, to, compareFrom, compareTo, costCenterId), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.ReportRead);
+        g.MapGet("/reports/balance-sheet", async (Guid legalEntityId, DateOnly asOf, DateOnly? compareAsOf, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new BalanceSheetQuery(legalEntityId, asOf, compareAsOf), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.ReportRead);
+        g.MapGet("/reports/cash-flow", async (Guid legalEntityId, DateOnly from, DateOnly to, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new CashFlowQuery(legalEntityId, from, to), ct)).ToHttpResult())
+            .RequirePermission(AccountingPermissions.ReportRead);
+
+        // CSV exports (UTF-8 with BOM; same filters as the JSON reports)
+        g.MapGet("/reports/trial-balance.csv", async (Guid legalEntityId, DateOnly from, DateOnly to, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new TrialBalanceQuery(legalEntityId, from, to), ct)).ToHttpResult(tb => Csv(AccountingCsv.TrialBalance(tb), $"trial-balance-{from:yyyyMMdd}-{to:yyyyMMdd}.csv")))
+            .RequirePermission(AccountingPermissions.ReportRead);
+        g.MapGet("/reports/income-statement.csv", async (Guid legalEntityId, DateOnly from, DateOnly to, DateOnly? compareFrom, DateOnly? compareTo, Guid? costCenterId,
+                IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new IncomeStatementQuery(legalEntityId, from, to, compareFrom, compareTo, costCenterId), ct))
+                .ToHttpResult(s => Csv(AccountingCsv.IncomeStatement(s), $"income-statement-{from:yyyyMMdd}-{to:yyyyMMdd}.csv")))
+            .RequirePermission(AccountingPermissions.ReportRead);
+        g.MapGet("/reports/balance-sheet.csv", async (Guid legalEntityId, DateOnly asOf, DateOnly? compareAsOf, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new BalanceSheetQuery(legalEntityId, asOf, compareAsOf), ct)).ToHttpResult(s => Csv(AccountingCsv.BalanceSheet(s), $"balance-sheet-{asOf:yyyyMMdd}.csv")))
+            .RequirePermission(AccountingPermissions.ReportRead);
+        g.MapGet("/reports/cash-flow.csv", async (Guid legalEntityId, DateOnly from, DateOnly to, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new CashFlowQuery(legalEntityId, from, to), ct)).ToHttpResult(s => Csv(AccountingCsv.CashFlow(s), $"cash-flow-{from:yyyyMMdd}-{to:yyyyMMdd}.csv")))
+            .RequirePermission(AccountingPermissions.ReportRead);
     }
+
+    private static IResult Csv(string content, string fileName) =>
+        Results.File(AccountingCsv.ToBytes(content), "text/csv; charset=utf-8", fileName);
 }

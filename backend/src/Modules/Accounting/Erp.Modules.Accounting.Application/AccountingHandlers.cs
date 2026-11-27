@@ -13,7 +13,7 @@ namespace Erp.Modules.Accounting.Application;
 
 // ---------- DTOs ----------
 public sealed record AccountDto(Guid Id, string Code, string NameEn, string NameAr, string Type, string NormalBalance, Guid? ParentId,
-    bool IsPostingAccount, string ControlSubledger, bool AllowManualPosting, string Status);
+    bool IsPostingAccount, string ControlSubledger, bool AllowManualPosting, string Status, string CashFlowCategory = "None");
 
 public sealed record FiscalPeriodDto(Guid Id, int PeriodNo, DateOnly StartDate, DateOnly EndDate, string Status);
 
@@ -44,7 +44,7 @@ public sealed record SeedResultDto(int AccountsCreated, int RulesCreated, IReadO
 internal static class AccountingMapping
 {
     public static AccountDto ToDto(Account a) => new(a.Id, a.Code, a.NameEn, a.NameAr, a.Type.ToString(), a.NormalBalance.ToString(), a.ParentId,
-        a.IsPostingAccount, a.ControlSubledger.ToString(), a.AllowManualPosting, a.Status.ToString());
+        a.IsPostingAccount, a.ControlSubledger.ToString(), a.AllowManualPosting, a.Status.ToString(), a.CashFlowCategory.ToString());
 
     public static FiscalYearDto ToDto(FiscalYear y) => new(y.Id, y.LegalEntityId, y.Code, y.StartDate, y.EndDate,
         y.Periods.Select(p => new FiscalPeriodDto(p.Id, p.PeriodNo, p.StartDate, p.EndDate, p.Status.ToString())).ToList());
@@ -84,7 +84,7 @@ public sealed class ListAccountsHandler(IAccountingDbContext db) : IQueryHandler
 }
 
 public sealed record CreateAccountCommand(string Code, string NameEn, string NameAr, string Type, Guid? ParentId, bool IsPostingAccount,
-    string? ControlSubledger, bool AllowManualPosting = true) : ICommand<AccountDto>;
+    string? ControlSubledger, bool AllowManualPosting = true, string? CashFlowCategory = null) : ICommand<AccountDto>;
 
 public sealed class CreateAccountValidator : AbstractValidator<CreateAccountCommand>
 {
@@ -95,6 +95,7 @@ public sealed class CreateAccountValidator : AbstractValidator<CreateAccountComm
         RuleFor(x => x.NameAr).NotEmpty().MaximumLength(200);
         RuleFor(x => x.Type).Must(t => Enum.TryParse<AccountType>(t, true, out _)).WithMessage("Unknown account type.");
         RuleFor(x => x.ControlSubledger).Must(c => c is null || Enum.TryParse<ControlSubledger>(c, true, out _)).WithMessage("Unknown control sub-ledger.");
+        RuleFor(x => x.CashFlowCategory).Must(c => c is null || Enum.TryParse<CashFlowCategory>(c, true, out _)).WithMessage("Unknown cash-flow category.");
     }
 }
 
@@ -121,6 +122,9 @@ public sealed class CreateAccountHandler(IAccountingDbContext db, ITenantContext
         var account = Account.Create(tenant.CompanyId!.Value, code, command.NameEn, command.NameAr, Enum.Parse<AccountType>(command.Type, true), parent,
             command.IsPostingAccount, command.ControlSubledger is null ? ControlSubledger.None : Enum.Parse<ControlSubledger>(command.ControlSubledger, true),
             command.AllowManualPosting);
+        account.SetCashFlowCategory(command.CashFlowCategory is null
+            ? (account.IsBalanceSheet && account.IsPostingAccount ? CashFlowCategory.Operating : CashFlowCategory.None)
+            : Enum.Parse<CashFlowCategory>(command.CashFlowCategory, true));
         db.Accounts.Add(account);
         await db.SaveChangesAsync(cancellationToken);
         return AccountingMapping.ToDto(account);
@@ -140,6 +144,31 @@ public sealed class UpdateAccountHandler(IAccountingDbContext db) : ICommandHand
         }
 
         account.Update(command.NameEn, command.NameAr, command.AllowManualPosting);
+        await db.SaveChangesAsync(cancellationToken);
+        return AccountingMapping.ToDto(account);
+    }
+}
+
+public sealed record SetAccountCashFlowCategoryCommand(Guid AccountId, string Category) : ICommand<AccountDto>;
+
+public sealed class SetAccountCashFlowCategoryValidator : AbstractValidator<SetAccountCashFlowCategoryCommand>
+{
+    public SetAccountCashFlowCategoryValidator() =>
+        RuleFor(x => x.Category).Must(c => Enum.TryParse<CashFlowCategory>(c, true, out _))
+            .WithMessage("Category must be None, Operating, Investing, Financing or Cash.");
+}
+
+public sealed class SetAccountCashFlowCategoryHandler(IAccountingDbContext db) : ICommandHandler<SetAccountCashFlowCategoryCommand, AccountDto>
+{
+    public async Task<Result<AccountDto>> Handle(SetAccountCashFlowCategoryCommand command, CancellationToken cancellationToken)
+    {
+        var account = await db.Accounts.FirstOrDefaultAsync(a => a.Id == command.AccountId, cancellationToken);
+        if (account is null)
+        {
+            return AccountingErrors.AccountNotFound;
+        }
+
+        account.SetCashFlowCategory(Enum.Parse<CashFlowCategory>(command.Category, true));
         await db.SaveChangesAsync(cancellationToken);
         return AccountingMapping.ToDto(account);
     }
@@ -190,6 +219,7 @@ public sealed class SeedGenericChartHandler(IAccountingDbContext db, ITenantCont
 
             var parent = template.Parent is null ? null : byCode[template.Parent];
             var account = Account.Create(companyId, template.Code, template.NameEn, template.NameAr, template.Type, parent, template.Posting, template.Control);
+            account.SetCashFlowCategory(GenericChartTemplate.CategoryFor(template));
             db.Accounts.Add(account);
             byCode[template.Code] = account;
             created++;

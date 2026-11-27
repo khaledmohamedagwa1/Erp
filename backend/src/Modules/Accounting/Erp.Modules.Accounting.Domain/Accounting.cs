@@ -25,6 +25,12 @@ public static partial class AccountingErrors
     public static readonly Error FiscalYearOverlaps = Error.Conflict("accounting.fiscal-year-overlaps", "The fiscal year overlaps an existing one.");
     public static readonly Error PeriodOrder = Error.Conflict("accounting.period-order", "Close periods in order (earlier periods first) and reopen them in reverse order.");
     public static readonly Error InvalidRate = Error.Validation("accounting.invalid-exchange-rate", "The exchange rate must be positive (1 for the functional currency).");
+    public static readonly Error FiscalYearNotFound = Error.NotFound("accounting.fiscal-year-not-found", "The fiscal year was not found.");
+    public static readonly Error FiscalYearClosed = Error.Conflict("accounting.fiscal-year-closed", "The fiscal year is closed. Reopen it (year-end reopen) before changing its periods.");
+    public static readonly Error FiscalYearNotClosed = Error.Conflict("accounting.fiscal-year-not-closed", "The fiscal year is not closed.");
+    public static readonly Error YearEndPeriodsNotReady = Error.Conflict("accounting.year-end-periods-not-ready",
+        "Close every period of the year except the last, and soft-close the last period, before the year-end close.");
+    public static readonly Error LaterYearClosed = Error.Conflict("accounting.later-year-closed", "A later fiscal year is already closed; reopen it first.");
 
     [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9.-]{0,19}$")]
     private static partial Regex CodePattern();
@@ -66,6 +72,19 @@ public enum ControlSubledger
     Grni = 4,
     Gini = 5,
     Wip = 6,
+}
+
+/// <summary>Where an account's movements appear in the indirect cash-flow statement.</summary>
+public enum CashFlowCategory
+{
+    /// <summary>Unclassified. Balance-sheet accounts without a category are shown under operating activities so the statement still ties.</summary>
+    None = 0,
+    Operating = 1,
+    Investing = 2,
+    Financing = 3,
+
+    /// <summary>Cash and cash equivalents: the accounts whose change the statement explains.</summary>
+    Cash = 4,
 }
 
 public enum AccountStatus
@@ -137,6 +156,11 @@ public sealed class Account : AggregateRoot, ICompanyScoped
 
     public AccountStatus Status { get; private set; }
 
+    public CashFlowCategory CashFlowCategory { get; private set; }
+
+    /// <summary>Balance-sheet accounts carry forward across fiscal years; revenue and expense accounts are closed to retained earnings.</summary>
+    public bool IsBalanceSheet => Type is AccountType.Asset or AccountType.Liability or AccountType.Equity;
+
     public NormalBalance NormalBalance => Type is AccountType.Asset or AccountType.Expense ? NormalBalance.Debit : NormalBalance.Credit;
 
     public static Account Create(Guid companyId, string code, string nameEn, string nameAr, AccountType type, Account? parent,
@@ -163,6 +187,17 @@ public sealed class Account : AggregateRoot, ICompanyScoped
         NameEn = Guard.MaxLength(Guard.NotEmpty(nameEn, "accounting.name-required", "English name"), 200, "accounting.name-too-long", "English name");
         NameAr = Guard.MaxLength(Guard.NotEmpty(nameAr, "accounting.name-required", "Arabic name"), 200, "accounting.name-too-long", "Arabic name");
         AllowManualPosting = allowManualPosting && !IsControl && IsPostingAccount;
+    }
+
+    public void SetCashFlowCategory(CashFlowCategory category)
+    {
+        if (!IsBalanceSheet && category != CashFlowCategory.None)
+        {
+            throw new DomainException(Error.Validation("accounting.cash-flow-category-balance-sheet-only",
+                "Only asset, liability and equity accounts have a cash-flow category (revenue and expenses enter through net profit)."));
+        }
+
+        CashFlowCategory = category;
     }
 
     public void Deactivate() => Status = AccountStatus.Inactive;
@@ -268,6 +303,14 @@ public sealed class FiscalYear : AggregateRoot, ICompanyScoped
     /// <summary>Calendar year of the end date; used to scope gapless journal numbering.</summary>
     public int NumberingYear => EndDate.Year;
 
+    /// <summary>True once the year-end close has run. All periods are then closed.</summary>
+    public bool IsClosed { get; private set; }
+
+    /// <summary>The closing journal (null when the year had no revenue or expense balances to close).</summary>
+    public Guid? ClosingJournalId { get; private set; }
+
+    public DateTime? ClosedAtUtc { get; private set; }
+
     public IReadOnlyList<FiscalPeriod> Periods => _periods.OrderBy(p => p.PeriodNo).ToList();
 
     public static FiscalYear Create(Guid companyId, Guid legalEntityId, DateOnly startDate, int months = 12)
@@ -302,6 +345,11 @@ public sealed class FiscalYear : AggregateRoot, ICompanyScoped
     /// </summary>
     public Result SetPeriodStatus(Guid periodId, PeriodStatus status)
     {
+        if (IsClosed)
+        {
+            return AccountingErrors.FiscalYearClosed;
+        }
+
         var period = _periods.FirstOrDefault(p => p.Id == periodId);
         if (period is null)
         {
@@ -327,6 +375,58 @@ public sealed class FiscalYear : AggregateRoot, ICompanyScoped
         period.SetStatus(status);
         Raise(new FiscalPeriodStatusChanged(Id, period.Id, LegalEntityId, period.PeriodNo, previous.ToString(), status.ToString()));
         return Result.Success();
+    }
+
+    public FiscalPeriod LastPeriod => _periods.OrderBy(p => p.PeriodNo).Last();
+
+    /// <summary>
+    /// Year-end close is allowed when every period except the last is closed and the last is soft-closed: the closing entry is
+    /// dated on the last day and must still be postable, while ordinary users can no longer post there.
+    /// </summary>
+    public Result CanClose()
+    {
+        var last = LastPeriod;
+        return _periods.Where(p => p.Id != last.Id).All(p => p.Status == PeriodStatus.Closed) && last.Status == PeriodStatus.SoftClosed
+            ? Result.Success()
+            : AccountingErrors.YearEndPeriodsNotReady;
+    }
+
+    /// <summary>Records the year-end close and closes the last period.</summary>
+    public void MarkClosed(Guid? closingJournalId, DateTime nowUtc)
+    {
+        if (IsClosed)
+        {
+            return;
+        }
+
+        var check = CanClose();
+        if (check.IsFailure)
+        {
+            throw new DomainException(check.Error);
+        }
+
+        var last = LastPeriod;
+        last.SetStatus(PeriodStatus.Closed);
+        IsClosed = true;
+        ClosingJournalId = closingJournalId;
+        ClosedAtUtc = nowUtc;
+        Raise(new FiscalPeriodStatusChanged(Id, last.Id, LegalEntityId, last.PeriodNo, PeriodStatus.SoftClosed.ToString(), PeriodStatus.Closed.ToString()));
+        Raise(new FiscalYearClosed(Id, LegalEntityId, closingJournalId));
+    }
+
+    /// <summary>Undoes the year-end close: the last period becomes soft-closed so the closing entry can be reversed on the last day.</summary>
+    public void Reopen()
+    {
+        if (!IsClosed)
+        {
+            throw new DomainException(AccountingErrors.FiscalYearNotClosed);
+        }
+
+        LastPeriod.SetStatus(PeriodStatus.SoftClosed);
+        IsClosed = false;
+        ClosingJournalId = null;
+        ClosedAtUtc = null;
+        Raise(new FiscalYearReopened(Id, LegalEntityId));
     }
 }
 
@@ -758,5 +858,11 @@ public sealed class AccountBalance : ICompanyScoped
 }
 
 public sealed record JournalPosted(Guid JournalId, Guid LegalEntityId, string Number, string SourceModule, string SourceDocType, Guid SourceDocId, string Purpose, decimal TotalBaseDebit) : IDomainEvent;
+
+public sealed record FiscalYearClosed(Guid FiscalYearId, Guid LegalEntityId, Guid? ClosingJournalId) : IDomainEvent;
+
+public sealed record FiscalYearReopened(Guid FiscalYearId, Guid LegalEntityId) : IDomainEvent;
+
+public sealed record OpeningBalancePosted(Guid OpeningBalanceId, Guid LegalEntityId, Guid JournalId) : IDomainEvent;
 
 public sealed record FiscalPeriodStatusChanged(Guid FiscalYearId, Guid PeriodId, Guid LegalEntityId, int PeriodNo, string From, string To) : IDomainEvent;
