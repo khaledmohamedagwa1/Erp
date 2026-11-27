@@ -345,8 +345,19 @@ public sealed class ListWarehousesHandler(IOrganizationDbContext db) : IQueryHan
 }
 
 // ---------- Contract implementation ----------
-public sealed class OrganizationQueries(IOrganizationDbContext db) : IOrganizationQueries
+public sealed class OrganizationQueries(IOrganizationDbContext db, ITenantContext tenant) : IOrganizationQueries
 {
+    public async Task<LegalEntitySummary?> GetLegalEntityAsync(Guid legalEntityId, CancellationToken cancellationToken = default)
+    {
+        // The company filter is lifted so another module can resolve any legal entity of the tenant; the tenant is still
+        // enforced here explicitly and by row-level security.
+        var tenantId = tenant.TenantId ?? throw new InvalidOperationException("Tenant context required.");
+        return await db.LegalEntities.IgnoreQueryFilters().AsNoTracking()
+            .Where(l => EF.Property<Guid>(l, "TenantId") == tenantId && l.Id == legalEntityId)
+            .Select(l => new LegalEntitySummary(l.Id, l.CompanyId, l.Name, l.FunctionalCurrency))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<CompanySummary>> GetCompaniesAsync(IReadOnlyCollection<Guid> companyIds, CancellationToken cancellationToken = default) =>
         await db.Companies.AsNoTracking().Where(c => companyIds.Contains(c.Id)).OrderBy(c => c.Code)
             .Select(c => new CompanySummary(c.Id, c.Code, c.NameEn, c.NameAr, c.BaseCurrency))

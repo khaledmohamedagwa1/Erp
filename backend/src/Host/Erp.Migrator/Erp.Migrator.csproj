@@ -10,6 +10,7 @@
     <ProjectReference Include="../../Modules/Parties/Erp.Modules.Parties.Infrastructure/Erp.Modules.Parties.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Tax/Erp.Modules.Tax.Infrastructure/Erp.Modules.Tax.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Catalog/Erp.Modules.Catalog.Infrastructure/Erp.Modules.Catalog.Infrastructure.csproj" />
+    <ProjectReference Include="../../Modules/Accounting/Erp.Modules.Accounting.Infrastructure/Erp.Modules.Accounting.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" />
