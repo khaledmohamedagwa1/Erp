@@ -26,7 +26,9 @@ public sealed record StockLineInput(
     string? BatchNumber,
     DateOnly? ManufactureDate,
     DateOnly? ExpiryDate,
-    IReadOnlyList<string>? Serials);
+    IReadOnlyList<string>? Serials,
+    Guid? BinId = null,
+    Guid? ToBinId = null);
 
 public sealed record StockLineDto(
     Guid LineId,
@@ -48,9 +50,9 @@ public sealed record OpeningStockDto(Guid Id, string Number, Guid LegalEntityId,
 
 public sealed record AdjustmentDto(Guid Id, string Number, Guid LegalEntityId, Guid WarehouseId, DateOnly Date, string Reason, string? Notes, string Status, decimal NetCost, Guid? JournalId, Guid? StockCountId, IReadOnlyList<StockLineDto> Lines);
 
-public sealed record TransferDto(Guid Id, string Number, Guid LegalEntityId, Guid FromWarehouseId, Guid ToWarehouseId, Guid TransitWarehouseId, DateOnly Date, string? Notes, string Status, int ReceiptCount, IReadOnlyList<StockLineDto> Lines);
+public sealed record TransferDto(Guid Id, string Number, Guid LegalEntityId, Guid FromWarehouseId, Guid ToWarehouseId, Guid TransitWarehouseId, DateOnly Date, string? Notes, string Status, int ReceiptCount, IReadOnlyList<StockLineDto> Lines, bool Direct);
 
-public sealed record CountLineDto(Guid LineId, Guid ProductId, Guid? VariantId, Guid? BatchId, string? BatchNumber, decimal SnapshotQuantity, decimal? CountedQuantity, decimal MovementsSinceSnapshot, decimal Variance);
+public sealed record CountLineDto(Guid LineId, Guid ProductId, Guid? VariantId, Guid? BatchId, string? BatchNumber, decimal SnapshotQuantity, decimal? CountedQuantity, decimal MovementsSinceSnapshot, decimal Variance, string? Serial);
 
 public sealed record CountDto(Guid Id, string Number, Guid LegalEntityId, Guid WarehouseId, DateOnly Date, string Status, DateTime? SnapshotAtUtc, Guid? AdjustmentId, IReadOnlyList<CountLineDto> Lines);
 
@@ -82,6 +84,8 @@ internal static class InventoryMapping
         ManufactureDate = i.ManufactureDate,
         ExpiryDate = i.ExpiryDate,
         Serials = i.Serials?.ToList() ?? [],
+        BinId = i.BinId,
+        ToBinId = i.ToBinId,
     };
 
     public static StockLineDto ToDto(StockDocumentLine l) => new(
@@ -92,10 +96,10 @@ internal static class InventoryMapping
 
     public static AdjustmentDto ToDto(StockAdjustment d) => new(d.Id, d.Number, d.LegalEntityId, d.WarehouseId, d.Date, d.Reason.ToString(), d.Notes, d.Status.ToString(), d.NetCost, d.JournalId, d.StockCountId, d.Lines.Select(ToDto).ToList());
 
-    public static TransferDto ToDto(StockTransfer d) => new(d.Id, d.Number, d.LegalEntityId, d.FromWarehouseId, d.ToWarehouseId, d.TransitWarehouseId, d.Date, d.Notes, d.Status.ToString(), d.ReceiptCount, d.Lines.Select(ToDto).ToList());
+    public static TransferDto ToDto(StockTransfer d) => new(d.Id, d.Number, d.LegalEntityId, d.FromWarehouseId, d.ToWarehouseId, d.TransitWarehouseId, d.Date, d.Notes, d.Status.ToString(), d.ReceiptCount, d.Lines.Select(ToDto).ToList(), d.Direct);
 
     public static CountDto ToDto(StockCount d) => new(d.Id, d.Number, d.LegalEntityId, d.WarehouseId, d.Date, d.Status.ToString(), d.SnapshotAtUtc, d.AdjustmentId,
-        d.Lines.Select(l => new CountLineDto(l.LineId, l.ProductId, l.VariantId, l.BatchId, l.BatchNumber, l.SnapshotQuantity, l.CountedQuantity, l.MovementsSinceSnapshot, l.Variance)).ToList());
+        d.Lines.Select(l => new CountLineDto(l.LineId, l.ProductId, l.VariantId, l.BatchId, l.BatchNumber, l.SnapshotQuantity, l.CountedQuantity, l.MovementsSinceSnapshot, l.Variance, l.Serial)).ToList());
 
     public static BatchInput? Batch(StockDocumentLine l) =>
         l.BatchNumber is null ? null : new BatchInput(l.BatchNumber, l.ManufactureDate, l.ExpiryDate);
@@ -238,7 +242,7 @@ public sealed class PostOpeningStockHandler(IInventoryDbContext db, IInventoryPo
             doc.LegalEntityId, doc.Date, SourceModules.Inventory, SourceDocTypes.OpeningStock, doc.Id, doc.Number,
             doc.Lines.Select(l => new InventoryPostingLine(l.LineId, l.ProductId, l.VariantId, doc.WarehouseId, l.UomId, l.Quantity,
                 InventoryMovementTypes.OpeningStock, l.UnitCost, InventoryMapping.Batch(l), InventoryMapping.Serials(l),
-                CounterRole: PostingRoles.OpeningBalanceEquity)).ToList(),
+                CounterRole: PostingRoles.OpeningBalanceEquity, BinId: l.BinId)).ToList(),
             PostJournal: true, JournalDescription: $"Opening stock {doc.Number}"), cancellationToken);
         if (result.IsFailure)
         {
@@ -355,7 +359,7 @@ public sealed class AdjustmentPoster(IInventoryPostingService posting)
             doc.Lines.Select(l => new InventoryPostingLine(l.LineId, l.ProductId, l.VariantId, doc.WarehouseId, l.UomId, l.Quantity,
                 l.Quantity > 0 ? InventoryMovementTypes.AdjustmentGain : InventoryMovementTypes.AdjustmentLoss,
                 l.Quantity > 0 ? l.UnitCost : null, InventoryMapping.Batch(l), InventoryMapping.Serials(l),
-                CounterRole: l.Quantity > 0 ? PostingRoles.InventoryAdjustmentGain : PostingRoles.InventoryAdjustmentLoss)).ToList(),
+                CounterRole: l.Quantity > 0 ? PostingRoles.InventoryAdjustmentGain : PostingRoles.InventoryAdjustmentLoss, BinId: l.BinId)).ToList(),
             PostJournal: true, JournalDescription: $"Stock adjustment {doc.Number} ({doc.Reason})"), ct);
         if (result.IsFailure)
         {
@@ -423,7 +427,8 @@ public sealed class ListAdjustmentsHandler(IInventoryDbContext db) : IQueryHandl
 }
 
 // ---------------- Transfers ----------------
-public sealed record CreateTransferCommand(Guid FromWarehouseId, Guid ToWarehouseId, DateOnly Date, string? Notes, IReadOnlyList<StockLineInput> Lines) : ICommand<TransferDto>;
+/// <param name="Direct">Move the stock in one posting without the transit warehouse (issue = receipt).</param>
+public sealed record CreateTransferCommand(Guid FromWarehouseId, Guid ToWarehouseId, DateOnly Date, string? Notes, IReadOnlyList<StockLineInput> Lines, bool Direct = false) : ICommand<TransferDto>;
 
 public sealed class CreateTransferValidator : AbstractValidator<CreateTransferCommand>
 {
@@ -460,7 +465,7 @@ public sealed class CreateTransferHandler(IInventoryDbContext db, InventoryDocum
 
         var number = await support.NextNumberAsync(ctx.Value.CompanyId, ctx.Value.LegalEntity.Id, "StockTransfer", "TRF", command.Date, cancellationToken);
         var doc = new StockTransfer(ctx.Value.CompanyId, ctx.Value.LegalEntity.Id, command.FromWarehouseId, command.ToWarehouseId, transit.Id,
-            number, command.Date, command.Notes, command.Lines.Select(InventoryMapping.ToLine));
+            number, command.Date, command.Notes, command.Lines.Select(InventoryMapping.ToLine), command.Direct);
         db.Transfers.Add(doc);
         await db.SaveChangesAsync(cancellationToken);
         return InventoryMapping.ToDto(doc);
@@ -497,7 +502,9 @@ public sealed class TransferActionHandler(IInventoryDbContext db) : ICommandHand
 /// </summary>
 public sealed class TransferLegPoster(IInventoryPostingService posting, ICatalogQueries catalog)
 {
-    public sealed record Leg(Guid LineId, Guid ProductId, Guid? VariantId, Guid UomId, decimal Quantity, string? BatchNumber, IReadOnlyList<string>? Serials, decimal? CarriedUnitCost);
+    /// <param name="CarriedTotalCost">Exact value to carry into the destination for the leg (spread over its movements); null = the out leg's cost.</param>
+    public sealed record Leg(Guid LineId, Guid ProductId, Guid? VariantId, Guid UomId, decimal Quantity, string? BatchNumber, IReadOnlyList<string>? Serials, decimal? CarriedUnitCost,
+        decimal? CarriedTotalCost = null, Guid? FromBinId = null, Guid? ToBinId = null);
 
     public async Task<Result<IReadOnlyDictionary<Guid, InventoryLineResult>>> MoveAsync(
         Guid legalEntityId, DateOnly date, string referenceNo, Guid sourceDocId, string outDocType, string inDocType,
@@ -507,7 +514,7 @@ public sealed class TransferLegPoster(IInventoryPostingService posting, ICatalog
             legalEntityId, date, SourceModules.Inventory, outDocType, sourceDocId, referenceNo,
             legs.Select(l => new InventoryPostingLine(l.LineId, l.ProductId, l.VariantId, fromWarehouseId, l.UomId, -l.Quantity,
                 InventoryMovementTypes.TransferOut, Batch: l.BatchNumber is null ? null : new BatchInput(l.BatchNumber), Serials: l.Serials,
-                CounterWarehouseId: toWarehouseId, CounterRole: outCounterRole)).ToList(),
+                CounterWarehouseId: toWarehouseId, CounterRole: outCounterRole, BinId: l.FromBinId)).ToList(),
             PostJournal: outCounterRole is not null, JournalDescription: $"Transfer {referenceNo}"), ct);
         if (outResult.IsFailure)
         {
@@ -522,13 +529,33 @@ public sealed class TransferLegPoster(IInventoryPostingService posting, ICatalog
             var leg = legByLine[line.LineId];
             var product = products[leg.ProductId];
             var unitCost = leg.CarriedUnitCost ?? line.UnitCost;
-            foreach (var movement in line.Movements)
+            var carried = 0m;
+            for (var m = 0; m < line.Movements.Count; m++)
             {
+                var movement = line.Movements[m];
+                // Exact value per movement: the out movement's own cost, or the carried total spread with the last movement taking the remainder.
+                decimal total;
+                if (leg.CarriedTotalCost is { } carriedTotal)
+                {
+                    total = m == line.Movements.Count - 1
+                        ? carriedTotal - carried
+                        : InventoryRounding.Money(carriedTotal * (movement.BaseQuantity / line.BaseQuantity));
+                }
+                else if (leg.CarriedUnitCost is { } carriedUnit)
+                {
+                    total = InventoryRounding.Money(-movement.BaseQuantity * carriedUnit);
+                }
+                else
+                {
+                    total = -movement.TotalCost;
+                }
+
+                carried += total;
                 inLines.Add(new InventoryPostingLine(movement.MovementId, leg.ProductId, leg.VariantId, toWarehouseId, product.BaseUomId, -movement.BaseQuantity,
                     InventoryMovementTypes.TransferIn, unitCost,
                     Batch: movement.BatchNumber is null ? null : new BatchInput(movement.BatchNumber),
                     Serials: movement.SerialNumber is null ? null : [movement.SerialNumber],
-                    CounterWarehouseId: fromWarehouseId, CounterRole: inCounterRole));
+                    CounterWarehouseId: fromWarehouseId, CounterRole: inCounterRole, TotalCost: total, BinId: leg.ToBinId));
             }
         }
 
@@ -561,9 +588,29 @@ public sealed class IssueTransferHandler(IInventoryDbContext db, TransferLegPost
             return InventoryErrors.InvalidTransition;
         }
 
+        if (doc.Direct)
+        {
+            // Source → destination in one posting. The two legs clear each other through InventoryInTransit within the same posting,
+            // so warehouse-specific inventory accounts are moved correctly and nothing is left in transit.
+            var direct = await legs.MoveAsync(doc.LegalEntityId, command.Date ?? doc.Date, doc.Number, doc.Id,
+                SourceDocTypes.StockTransferIssue, SourceDocTypes.StockTransferReceipt, doc.FromWarehouseId, doc.ToWarehouseId,
+                doc.Lines.Select(l => new TransferLegPoster.Leg(l.LineId, l.ProductId, l.VariantId, l.UomId, l.Quantity, l.BatchNumber, InventoryMapping.Serials(l), null,
+                    FromBinId: l.BinId, ToBinId: l.ToBinId)).ToList(),
+                PostingRoles.InventoryInTransit, PostingRoles.InventoryInTransit, cancellationToken);
+            if (direct.IsFailure)
+            {
+                return direct.Error;
+            }
+
+            doc.MarkMovedDirectly(direct.Value.ToDictionary(kv => kv.Key, kv => (Math.Abs(kv.Value.BaseQuantity), kv.Value.UnitCost, Math.Abs(kv.Value.TotalCost))));
+            await db.SaveChangesAsync(cancellationToken);
+            return InventoryMapping.ToDto(doc);
+        }
+
         var moved = await legs.MoveAsync(doc.LegalEntityId, command.Date ?? doc.Date, doc.Number, doc.Id,
             SourceDocTypes.StockTransferIssue, SourceDocTypes.StockTransferIssueTransit, doc.FromWarehouseId, doc.TransitWarehouseId,
-            doc.Lines.Select(l => new TransferLegPoster.Leg(l.LineId, l.ProductId, l.VariantId, l.UomId, l.Quantity, l.BatchNumber, InventoryMapping.Serials(l), null)).ToList(),
+            doc.Lines.Select(l => new TransferLegPoster.Leg(l.LineId, l.ProductId, l.VariantId, l.UomId, l.Quantity, l.BatchNumber, InventoryMapping.Serials(l), null,
+                FromBinId: l.BinId)).ToList(),
             PostingRoles.InventoryInTransit, null, cancellationToken);
         if (moved.IsFailure)
         {
@@ -604,6 +651,7 @@ public sealed class ReceiveTransferHandler(IInventoryDbContext db, TransferLegPo
 
         var products = (await catalog.GetProductsAsync(doc.Lines.Select(l => l.ProductId).Distinct().ToList(), cancellationToken)).ToDictionary(p => p.Id);
         var receipt = new Dictionary<Guid, (decimal BaseQuantity, IReadOnlyList<string> Serials)>();
+        var carriedCosts = new Dictionary<Guid, decimal>();
         var legList = new List<TransferLegPoster.Leg>();
         foreach (var r in requested)
         {
@@ -615,12 +663,18 @@ public sealed class ReceiveTransferHandler(IInventoryDbContext db, TransferLegPo
 
             var factor = line.PostedBaseQuantity!.Value / line.Quantity;
             var baseQuantity = InventoryRounding.Quantity(r.Quantity * factor);
+            if (baseQuantity > 0 && baseQuantity <= doc.OpenBaseQuantity(line))
+            {
+                // The receipt that empties the line carries the exact remainder of the issued value: no residue in transit.
+                carriedCosts[line.LineId] = doc.CarriedCost(line, baseQuantity);
+            }
+
             receipt[line.LineId] = (baseQuantity, r.Serials ?? []);
             legList.Add(new TransferLegPoster.Leg(line.LineId, line.ProductId, line.VariantId, products[line.ProductId].BaseUomId, baseQuantity,
-                line.BatchNumber, r.Serials is { Count: > 0 } ? r.Serials : null, line.PostedUnitCost));
+                line.BatchNumber, r.Serials is { Count: > 0 } ? r.Serials : null, line.PostedUnitCost, carriedCosts.GetValueOrDefault(line.LineId), ToBinId: line.ToBinId));
         }
 
-        var receiptNo = doc.RecordReceipt(receipt);
+        var receiptNo = doc.RecordReceipt(receipt, carriedCosts);
         var receiptId = DeterministicId(doc.Id, receiptNo);
         var moved = await legs.MoveAsync(doc.LegalEntityId, command.Date ?? DateOnly.FromDateTime(DateTime.UtcNow), $"{doc.Number}/R{receiptNo}", receiptId,
             SourceDocTypes.StockTransferReceiptOut, SourceDocTypes.StockTransferReceipt, doc.TransitWarehouseId, doc.ToWarehouseId, legList,
@@ -743,6 +797,17 @@ public sealed class SnapshotCountHandler(IInventoryDbContext db, ICatalogQueries
         var products = (await catalog.GetProductsAsync(balances.Select(b => b.ProductId).Distinct().ToList(), cancellationToken)).ToDictionary(p => p.Id);
         var batchIds = balances.Where(b => b.BatchKey != Guid.Empty).Select(b => b.BatchKey).Distinct().ToList();
         var batches = await db.Batches.AsNoTracking().Where(b => batchIds.Contains(b.Id)).ToDictionaryAsync(b => b.Id, cancellationToken);
+        var serialProducts = products.Values.Where(p => p.Tracking == "Serial").Select(p => p.Id).ToList();
+        var serialLines = (await db.Serials.AsNoTracking()
+                .Where(x => serialProducts.Contains(x.ProductId) && x.CurrentWarehouseId == doc.WarehouseId && x.Status == SerialStatus.InStock)
+                .ToListAsync(cancellationToken))
+            .Select(x => new StockCountLine
+            {
+                ProductId = x.ProductId,
+                BaseUomId = products[x.ProductId].BaseUomId,
+                Serial = x.Serial,
+                SnapshotQuantity = 1,
+            });
         var lines = balances
             .Where(b => products.TryGetValue(b.ProductId, out var p) && p.Tracking != "Serial")
             .Select(b => new StockCountLine
@@ -754,7 +819,8 @@ public sealed class SnapshotCountHandler(IInventoryDbContext db, ICatalogQueries
                 BaseUomId = products[b.ProductId].BaseUomId,
                 SnapshotQuantity = b.OnHand,
             })
-            .OrderBy(l => l.ProductId).ThenBy(l => l.BatchNumber)
+            .Concat(serialLines)
+            .OrderBy(l => l.ProductId).ThenBy(l => l.BatchNumber).ThenBy(l => l.Serial)
             .ToList();
         doc.TakeSnapshot(clock.UtcNow, lines);
         await db.SaveChangesAsync(cancellationToken);
@@ -762,7 +828,8 @@ public sealed class SnapshotCountHandler(IInventoryDbContext db, ICatalogQueries
     }
 }
 
-public sealed record CountEntry(Guid ProductId, Guid? VariantId, string? BatchNumber, decimal CountedQuantity);
+/// <param name="Serials">Serial-tracked products: the serial numbers found (the quantity is ignored).</param>
+public sealed record CountEntry(Guid ProductId, Guid? VariantId, string? BatchNumber, decimal CountedQuantity, IReadOnlyList<string>? Serials = null);
 
 public sealed record EnterCountsCommand(Guid Id, IReadOnlyList<CountEntry> Entries) : ICommand<CountDto>;
 
@@ -782,6 +849,12 @@ public sealed class EnterCountsHandler(IInventoryDbContext db, ICatalogQueries c
             if (!products.TryGetValue(entry.ProductId, out var product) || !product.IsStockable)
             {
                 return Error.NotFound("inventory.product-not-found", "A product was not found in this company.");
+            }
+
+            if (product.Tracking == "Serial")
+            {
+                doc.EnterSerialCount(entry.ProductId, entry.VariantId, product.BaseUomId, entry.Serials ?? []);
+                continue;
             }
 
             Guid? batchId = null;
@@ -844,9 +917,18 @@ internal static class CountSupport
     public static async Task<IReadOnlyDictionary<Guid, decimal>> CurrentOnHandAsync(IInventoryDbContext db, StockCount doc, CancellationToken ct)
     {
         var balances = await db.Balances.AsNoTracking().Where(b => b.WarehouseId == doc.WarehouseId).ToListAsync(ct);
-        return doc.Lines.ToDictionary(l => l.LineId, l => balances
-            .Where(b => b.ProductId == l.ProductId && b.VariantKey == Keys.Of(l.VariantId) && b.BatchKey == Keys.Of(l.BatchId))
-            .Sum(b => b.OnHand));
+        var serialNumbers = doc.Lines.Where(l => l.Serial is not null).Select(l => l.Serial!).Distinct().ToList();
+        var inStock = serialNumbers.Count == 0
+            ? []
+            : (await db.Serials.AsNoTracking()
+                .Where(s => serialNumbers.Contains(s.Serial) && s.CurrentWarehouseId == doc.WarehouseId && s.Status == SerialStatus.InStock)
+                .Select(s => new { s.ProductId, s.Serial }).ToListAsync(ct))
+              .Select(s => (s.ProductId, s.Serial.ToUpperInvariant())).ToHashSet();
+        return doc.Lines.ToDictionary(l => l.LineId, l => l.Serial is not null
+            ? inStock.Contains((l.ProductId, l.Serial.ToUpperInvariant())) ? 1m : 0m
+            : balances
+                .Where(b => b.ProductId == l.ProductId && b.VariantKey == Keys.Of(l.VariantId) && b.BatchKey == Keys.Of(l.BatchId))
+                .Sum(b => b.OnHand));
     }
 }
 
@@ -875,8 +957,20 @@ public sealed class PostCountHandler(IInventoryDbContext db, InventoryDocumentSu
         {
             var date = command.Date ?? doc.Date;
             var number = await support.NextNumberAsync(doc.CompanyId, doc.LegalEntityId, SourceDocTypes.StockAdjustment, "ADJ", date, cancellationToken);
+            // Serial lines (±1 each) are grouped per product and direction into one adjustment line carrying the serial numbers.
+            var serialAdjustments = variances.Where(l => l.Serial is not null)
+                .GroupBy(l => (l.ProductId, l.VariantId, l.BaseUomId, Gain: l.Variance > 0))
+                .Select(g => new StockDocumentLine
+                {
+                    LineId = SequentialGuid.New(),
+                    ProductId = g.Key.ProductId,
+                    VariantId = g.Key.VariantId,
+                    UomId = g.Key.BaseUomId,
+                    Quantity = g.Sum(l => l.Variance),
+                    Serials = g.Select(l => l.Serial!).ToList(),
+                });
             var adjustment = new StockAdjustment(doc.CompanyId, doc.LegalEntityId, doc.WarehouseId, number, date, AdjustmentReason.CountVariance,
-                $"Stock count {doc.Number}", variances.Select(l => new StockDocumentLine
+                $"Stock count {doc.Number}", variances.Where(l => l.Serial is null).Select(l => new StockDocumentLine
                 {
                     LineId = SequentialGuid.New(),
                     ProductId = l.ProductId,
@@ -884,7 +978,7 @@ public sealed class PostCountHandler(IInventoryDbContext db, InventoryDocumentSu
                     UomId = l.BaseUomId,
                     Quantity = l.Variance,
                     BatchNumber = l.BatchNumber,
-                }), doc.Id);
+                }).Concat(serialAdjustments), doc.Id);
             db.Adjustments.Add(adjustment);
             adjustment.Approve();
             var posted = await poster.PostAsync(adjustment, cancellationToken);

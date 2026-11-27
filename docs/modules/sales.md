@@ -173,7 +173,7 @@ COGS is booked by the inventory engine as a separate journal: purpose `inventory
 
 ## Known limitations
 
-- A return line restocks at the cost and batch of the first issue movement of its source line. A line issued from several batches or FIFO layers returns at the first one.
+- A return line restocks what its source line actually issued: Inventory splits it across the line's issue movements (batches/serials) in proportion to what each can still take back, each at its own cost. A FIFO line issued from several layers without batches is one movement and returns at its blended cost.
 - Order lines are invoiced at the order's unit; there is no unit change between documents.
 - Invoices created from an order or delivery cannot have their lines edited. Discard and recreate them instead.
 - Multi-currency invoices use the spot rate of the document date. Realized FX is handled by Finance at settlement.

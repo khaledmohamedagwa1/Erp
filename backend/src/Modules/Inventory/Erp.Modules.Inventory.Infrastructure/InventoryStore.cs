@@ -122,6 +122,12 @@ public sealed class InventoryStore(ErpDbSession session, ITenantContext tenant) 
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task LockItemAsync(Guid companyId, Guid productId, Guid variantKey, Guid warehouseId, CancellationToken cancellationToken)
+    {
+        await using var command = Command(EnsureAggregate, companyId, productId, variantKey, warehouseId, Guid.Empty);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task LockValuationAsync(Guid companyId, Guid valuationAreaId, Guid productId, Guid variantKey, string costingMethod, CancellationToken cancellationToken)
     {
         var transaction = session.Transaction ?? throw new InvalidOperationException("Inventory valuation requires a transaction.");

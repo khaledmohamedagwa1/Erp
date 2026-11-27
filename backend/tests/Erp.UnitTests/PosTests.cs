@@ -213,7 +213,7 @@ public class PosJournalTests
         var lines = PosJournal.ForReceipt(receipt, Targets).Lines;
         lines.Sum(l => l.Debit).ShouldBe(lines.Sum(l => l.Credit));
         lines.Single(l => l.AccountId is not null).Debit.ShouldBe(114.00m);
-        lines.Single(l => l.Role == PostingRoles.SalesDiscount).Debit.ShouldBe(0.02m);
+        lines.Single(l => l.Role == PostingRoles.CashRounding).Debit.ShouldBe(0.02m);
         lines.Single(l => l.Role == PostingRoles.SalesRevenue).Credit.ShouldBe(100.02m);
         lines.Single(l => l.Role == PostingRoles.OutputTax).Credit.ShouldBe(14.00m);
         lines.ShouldNotContain(l => l.Role == PostingRoles.CustomerReceivable);

@@ -289,7 +289,10 @@ public sealed record PurchaseOrderLine(
     decimal ReceivedQuantity = 0,
     decimal InvoicedQuantity = 0,
     decimal InvoicedNotReceivedQuantity = 0,
-    decimal InvoicedNotReceivedBase = 0)
+    decimal InvoicedNotReceivedBase = 0,
+    decimal InvoicedNotReceivedUnitPrice = 0,
+    decimal InvoicedNotReceivedRate = 0,
+    Guid? InvoicedNotReceivedTaxGroupId = null)
 {
     /// <summary>Unit price after the line discount (transaction currency).</summary>
     public decimal NetUnitPrice => Money.Cost(UnitPrice * (1 - (DiscountPercent / 100m)));
@@ -450,7 +453,7 @@ public sealed class PurchaseOrder : AggregateRoot, IBranchScoped, IWarehouseScop
     }
 
     /// <summary>Invoice-before-receipt: invoiced quantity and its functional value waiting for the goods.</summary>
-    public void ApplyInvoiceBeforeReceipt(Guid lineId, decimal quantity, decimal baseValue)
+    public void ApplyInvoiceBeforeReceipt(Guid lineId, decimal quantity, decimal baseValue, decimal unitPrice = 0, decimal rate = 0, Guid? taxGroupId = null)
     {
         var line = Line(lineId);
         Replace(line with
@@ -458,6 +461,9 @@ public sealed class PurchaseOrder : AggregateRoot, IBranchScoped, IWarehouseScop
             InvoicedQuantity = line.InvoicedQuantity + quantity,
             InvoicedNotReceivedQuantity = line.InvoicedNotReceivedQuantity + quantity,
             InvoicedNotReceivedBase = line.InvoicedNotReceivedBase + baseValue,
+            InvoicedNotReceivedUnitPrice = unitPrice > 0 ? unitPrice : line.InvoicedNotReceivedUnitPrice,
+            InvoicedNotReceivedRate = rate > 0 ? rate : line.InvoicedNotReceivedRate,
+            InvoicedNotReceivedTaxGroupId = taxGroupId ?? line.InvoicedNotReceivedTaxGroupId,
         });
     }
 

@@ -24,6 +24,9 @@ public sealed record InventoryPolicy
     public bool EnableExpiryTracking { get; init; } = true;
 
     public bool EnableReservations { get; init; } = true;
+
+    /// <summary>Queue a recost of weighted-average items when a back-dated posting arrives (corrections post automatically). Off by default.</summary>
+    public bool AutoRecostBackdatedPostings { get; init; }
 }
 
 public sealed record SalesPolicy
@@ -47,6 +50,9 @@ public sealed record ProcurementPolicy
     public decimal PriceTolerancePercent { get; init; } = 2m;
 
     public decimal QuantityTolerancePercent { get; init; }
+
+    /// <summary>ReceiptDate (default: goods are valued at the spot rate of the receipt date) or OrderRate (the purchase order's rate).</summary>
+    public string ReceiptValuationRate { get; init; } = "ReceiptDate";
 }
 
 public static class PolicySections

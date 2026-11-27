@@ -24,6 +24,10 @@ public sealed record ReceiveRequest(DateOnly? Date, IReadOnlyList<TransferReceip
 
 public sealed record CountsRequest(IReadOnlyList<CountEntry> Entries);
 
+public sealed record BinRequest(string Code, string? Name, bool IsDefaultReceiving);
+
+public sealed record BinUpdateRequest(string? Name, bool? IsDefaultReceiving, bool? IsActive);
+
 public sealed class InventoryModule : IErpModule
 {
     public const string Code = "inventory";
@@ -41,6 +45,8 @@ public sealed class InventoryModule : IErpModule
             new(InventoryPermissions.DocumentApprove, Code, "Approve inventory documents", "اعتماد مستندات المخزون", IsSensitive: true),
             new(InventoryPermissions.DocumentPost, Code, "Post inventory documents (changes stock and the ledger)", "ترحيل مستندات المخزون", IsSensitive: true),
             new(InventoryPermissions.ReservationManage, Code, "Reserve and release stock", "حجز المخزون وإلغاء الحجز"),
+            new(InventoryPermissions.BinManage, Code, "Set up bins and move stock between bins", "إعداد مواقع التخزين ونقل المخزون بينها"),
+            new(InventoryPermissions.Recost, Code, "Recalculate issue costs of back-dated postings (posts cost corrections)", "إعادة احتساب تكلفة الصرف للحركات بأثر رجعي (يرحّل تسويات)", IsSensitive: true),
         ],
         Menu:
         [
@@ -50,6 +56,8 @@ public sealed class InventoryModule : IErpModule
             new("inventory.adjustments", "Adjustments", "التسويات", "/inventory/adjustments", "inventory", 40, InventoryPermissions.Read),
             new("inventory.counts", "Stock counts", "الجرد", "/inventory/counts", "inventory", 50, InventoryPermissions.Read),
             new("inventory.opening-stock", "Opening stock", "أرصدة أول المدة", "/inventory/opening-stock", "inventory", 60, InventoryPermissions.Read),
+            new("inventory.bins", "Bins", "مواقع التخزين", "/inventory/bins", "inventory", 70, InventoryPermissions.Read),
+            new("inventory.recost", "Recost", "إعادة احتساب التكلفة", "/inventory/recost", "inventory", 80, InventoryPermissions.Recost),
         ]);
 
     public void AddServices(IServiceCollection services, IConfiguration configuration)
@@ -68,6 +76,8 @@ public sealed class InventoryModule : IErpModule
         services.AddScoped<InventoryDocumentSupport>();
         services.AddScoped<AdjustmentPoster>();
         services.AddScoped<TransferLegPoster>();
+        services.AddScoped<BinStock>();
+        services.AddScoped<RecostEngine>();
 
         // Replaces the catalog's default "never used" probe (registered with TryAdd by the Catalog module).
         services.AddScoped<IProductUsageProbe, InventoryProductUsageProbe>();
@@ -91,6 +101,32 @@ public sealed class InventoryModule : IErpModule
         g.MapGet("/batches", async (Guid? productId, IDispatcher d, CancellationToken ct) => (await d.Send(new BatchesQuery(productId), ct)).ToHttpResult())
             .RequirePermission(InventoryPermissions.Read);
         g.MapGet("/serials", async (Guid? productId, string? status, IDispatcher d, CancellationToken ct) => (await d.Send(new SerialsQuery(productId, status), ct)).ToHttpResult())
+            .RequirePermission(InventoryPermissions.Read);
+        g.MapGet("/returnable-issues", async (string sourceDocType, Guid sourceDocId, Guid sourceLineId, IStockQueries stock, CancellationToken ct) =>
+                Results.Ok(await stock.GetReturnableIssuesAsync(sourceDocType, sourceDocId, sourceLineId, ct)))
+            .RequirePermission(InventoryPermissions.Read);
+
+        // Bins (opt-in per warehouse: a warehouse with active bins is bin-managed)
+        g.MapGet("/warehouses/{warehouseId:guid}/bins", async (Guid warehouseId, IDispatcher d, CancellationToken ct) => (await d.Send(new ListBinsQuery(warehouseId), ct)).ToHttpResult())
+            .RequirePermission(InventoryPermissions.Read);
+        g.MapPost("/warehouses/{warehouseId:guid}/bins", async (Guid warehouseId, BinRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new CreateBinCommand(warehouseId, body.Code, body.Name, body.IsDefaultReceiving), ct)).ToHttpResult(x => Results.Created($"/api/v1/inventory/bins/{x.Id}", x)))
+            .RequirePermission(InventoryPermissions.BinManage);
+        g.MapPut("/bins/{id:guid}", async (Guid id, BinUpdateRequest body, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new UpdateBinCommand(id, body.Name, body.IsDefaultReceiving, body.IsActive), ct)).ToHttpResult())
+            .RequirePermission(InventoryPermissions.BinManage);
+        g.MapGet("/warehouses/{warehouseId:guid}/bin-stock", async (Guid warehouseId, Guid? productId, IDispatcher d, CancellationToken ct) =>
+                (await d.Send(new BinStockQuery(warehouseId, productId), ct)).ToHttpResult())
+            .RequirePermission(InventoryPermissions.Read);
+        g.MapPost("/bin-transfers", async (TransferBinStockCommand body, IDispatcher d, CancellationToken ct) => (await d.Send(body, ct)).ToHttpResult())
+            .RequirePermission(InventoryPermissions.BinManage).RequireIdempotency();
+
+        // Recost
+        g.MapPost("/recost", async (RunRecostCommand body, IDispatcher d, CancellationToken ct) => (await d.Send(body, ct)).ToHttpResult())
+            .RequirePermission(InventoryPermissions.Recost).RequireIdempotency();
+        g.MapGet("/recost-runs", async (Guid? productId, IDispatcher d, CancellationToken ct) => (await d.Send(new ListRecostRunsQuery(productId), ct)).ToHttpResult())
+            .RequirePermission(InventoryPermissions.Read);
+        g.MapGet("/recost-runs/{id:guid}", async (Guid id, IDispatcher d, CancellationToken ct) => (await d.Send(new GetRecostRunQuery(id), ct)).ToHttpResult())
             .RequirePermission(InventoryPermissions.Read);
 
         // Opening stock

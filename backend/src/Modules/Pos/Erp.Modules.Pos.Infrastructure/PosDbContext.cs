@@ -35,6 +35,7 @@ public sealed class PosDbContext(DbContextOptions<PosDbContext> options, ErpDbCo
             b.Property(x => x.StalePricePolicy).HasMaxLength(30).IsRequired();
             b.Property(x => x.DeviceKeyHash).HasMaxLength(64);
             b.Ignore(x => x.ReceiptPrefix);
+            b.Ignore(x => x.OfflinePrefix);
             b.HasIndex(TenantIdProperty, nameof(PosTerminal.CompanyId), nameof(PosTerminal.Code)).IsUnique();
         });
 
@@ -130,7 +131,11 @@ public sealed class PosDbContext(DbContextOptions<PosDbContext> options, ErpDbCo
                 p.Property(x => x.Method).HasConversion<string>();
                 p.Property(x => x.Amount).HasPrecision(19, 4);
                 p.Property(x => x.Reference).HasMaxLength(100);
+                p.Property(x => x.ForeignCurrency).HasMaxLength(3);
+                p.Property(x => x.ForeignAmount).HasPrecision(19, 4);
+                p.Property(x => x.ExchangeRate).HasPrecision(19, 8);
             });
+            b.Property(x => x.OfflineCreatedAtUtc).HasPrecision(3);
         });
     }
 }

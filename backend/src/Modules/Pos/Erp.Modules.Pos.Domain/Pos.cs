@@ -25,6 +25,7 @@ public static class PosErrors
     public static readonly Error InvalidMaxDiscount = Error.Validation("pos.invalid-max-discount", "The maximum discount must be between 0 and 100 %.");
     public static readonly Error InvalidStalePricePolicy = Error.Validation("pos.invalid-stale-price-policy", "The stale price policy must be Reject or AcceptServerPrices.");
     public static readonly Error InvalidMovementKind = Error.Validation("pos.invalid-movement-kind", "The cash movement kind must be PayIn or PayOut.");
+    public static readonly Error InvalidOfflineRange = Error.Validation("pos.invalid-offline-range", "An offline number range must hold between 1 and 10000 numbers.");
 }
 
 public enum PaymentMethod
@@ -208,6 +209,30 @@ public sealed class PosTerminal : AggregateRoot, IBranchScoped, IWarehouseScoped
     public DateTime? DeviceRegisteredAtUtc { get; private set; }
 
     public bool IsActive { get; private set; }
+
+    /// <summary>Highest offline receipt number handed to the terminal so far (numbers 1..this are valid offline numbers).</summary>
+    public long OfflineAllocatedTo { get; private set; }
+
+    /// <summary>Prefix of receipt numbers the terminal creates while offline (followed by the number from its allocated ranges).</summary>
+    public string OfflinePrefix => $"OFF-{Code}-";
+
+    /// <summary>Reserves the next block of offline receipt numbers for the device (it numbers receipts itself while offline).</summary>
+    public (long From, long To) AllocateOfflineRange(int size)
+    {
+        if (size is < 1 or > 10000)
+        {
+            throw new DomainException(PosErrors.InvalidOfflineRange);
+        }
+
+        var from = OfflineAllocatedTo + 1;
+        OfflineAllocatedTo += size;
+        return (from, OfflineAllocatedTo);
+    }
+
+    /// <summary>True when <paramref name="number"/> is an offline number from one of the terminal's allocated ranges.</summary>
+    public bool IsAllocatedOfflineNumber(string? number) =>
+        number is not null && number.StartsWith(OfflinePrefix, StringComparison.Ordinal) && long.TryParse(number[OfflinePrefix.Length..], System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var n) && n >= 1 && n <= OfflineAllocatedTo;
 
     public void Update(Guid legalEntityId, Guid? branchId, Guid warehouseId, string name, Guid priceListId, string currency, Guid cashAccountId,
         Guid? cardAccountId, Guid? walletAccountId, decimal maxDiscountPercent, string stalePricePolicy, Guid defaultCustomerId)
@@ -656,19 +681,29 @@ public sealed class PosPayment
     {
     }
 
-    public PosPayment(PaymentMethod method, decimal amount, string? reference)
+    public PosPayment(PaymentMethod method, decimal amount, string? reference, string? foreignCurrency = null, decimal? foreignAmount = null, decimal? exchangeRate = null)
     {
         Method = method;
         Amount = amount;
         Reference = string.IsNullOrWhiteSpace(reference) ? null : reference.Trim();
+        ForeignCurrency = foreignCurrency;
+        ForeignAmount = foreignAmount;
+        ExchangeRate = exchangeRate;
     }
 
     public PaymentMethod Method { get; private set; }
 
-    /// <summary>Tendered amount (for cash, before change).</summary>
+    /// <summary>Tendered amount in the terminal currency (for cash, before change). Foreign cash: converted at the day rate.</summary>
     public decimal Amount { get; private set; }
 
     public string? Reference { get; private set; }
+
+    /// <summary>Foreign cash tendered: its currency, amount and the rate used (terminal-currency units per unit).</summary>
+    public string? ForeignCurrency { get; private set; }
+
+    public decimal? ForeignAmount { get; private set; }
+
+    public decimal? ExchangeRate { get; private set; }
 }
 
 /// <summary>
@@ -771,9 +806,20 @@ public sealed class PosReceipt : AggregateRoot, IBranchScoped, IWarehouseScoped
 
     public Guid? JournalId { get; private set; }
 
+    /// <summary>Created on the device while it was offline and synchronised later (numbered from the terminal's offline range).</summary>
+    public bool IsOffline { get; private set; }
+
+    public DateTime? OfflineCreatedAtUtc { get; private set; }
+
     public List<PosReceiptLine> Lines { get; private set; } = [];
 
     public List<PosPayment> Payments { get; private set; } = [];
+
+    public void MarkOffline(DateTime createdOnDeviceUtc)
+    {
+        IsOffline = true;
+        OfflineCreatedAtUtc = createdOnDeviceUtc;
+    }
 
     public PosReceiptLine Line(Guid uid) => Lines.FirstOrDefault(l => l.Uid == uid) ?? throw new DomainException(PosErrors.LineNotFound);
 

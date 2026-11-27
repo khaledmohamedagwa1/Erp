@@ -65,6 +65,10 @@ public static class PosAppErrors
     public static readonly Error RefundTerminalMismatch = Error.Validation("pos.refund-terminal-mismatch", "Refunds must be given at a terminal of the same legal entity and currency.");
     public static readonly Error UnknownPaymentMethod = Error.Validation("pos.invalid-payment-method", "The payment method must be Cash, Card, Wallet or Other.");
     public static readonly Error PriceVersionStale = Error.Conflict("pos.price-version-stale", "Prices changed since the terminal's catalog snapshot; review the repriced cart and resubmit.");
+    public static readonly Error ForeignCurrencyCashOnly = Error.Validation("pos.foreign-currency-cash-only", "Only cash can be tendered in a foreign currency.");
+    public static readonly Error RateMissing = Error.Validation("pos.rate-missing", "No exchange rate is defined for the tendered currency on the business date.");
+    public static readonly Error OfflineNumberInvalid = Error.Validation("pos.offline-number-invalid", "The offline receipt number is not in a range allocated to this terminal.");
+    public static readonly Error OfflineDateInvalid = Error.Validation("pos.offline-date-invalid", "The offline receipt date cannot be in the future.");
 }
 
 public static class PosDevice
@@ -108,8 +112,9 @@ public sealed class PosAccounts(ICashBankAccountQueries accounts)
     public async Task<IReadOnlyDictionary<PaymentMethod, PaymentTarget>> ResolveAsync(PosTerminal terminal, CancellationToken ct) => new Dictionary<PaymentMethod, PaymentTarget>
     {
         [PaymentMethod.Cash] = await TargetAsync(terminal.CashAccountId, PostingRoles.CashAccount, ct),
-        [PaymentMethod.Card] = terminal.CardAccountId is { } card ? await TargetAsync(card, PostingRoles.BankAccount, ct) : new PaymentTarget(PostingRoles.BankAccount, null),
-        [PaymentMethod.Wallet] = terminal.WalletAccountId is { } wallet ? await TargetAsync(wallet, PostingRoles.BankAccount, ct) : new PaymentTarget(PostingRoles.BankAccount, null),
+        // Card and wallet takings sit in the card clearing account until the acquirer settles them (unless a bank account is configured).
+        [PaymentMethod.Card] = terminal.CardAccountId is { } card ? await TargetAsync(card, PostingRoles.CardClearing, ct) : new PaymentTarget(PostingRoles.CardClearing, null),
+        [PaymentMethod.Wallet] = terminal.WalletAccountId is { } wallet ? await TargetAsync(wallet, PostingRoles.CardClearing, ct) : new PaymentTarget(PostingRoles.CardClearing, null),
         [PaymentMethod.Other] = new PaymentTarget(PostingRoles.BankAccount, null),
     };
 
@@ -144,8 +149,8 @@ public sealed class PosJournal
     }
 
     /// <summary>
-    /// Sale: Dr each payment method net of change / Cr revenue per posting group / Cr output tax per tax code / rounding to
-    /// SalesDiscount. Refund: the mirror image with SalesReturns instead of revenue.
+    /// Sale: Dr each payment method net of change / Cr revenue per posting group / Cr output tax per tax code / cash rounding to
+    /// CashRounding. Refund: the mirror image with SalesReturns instead of revenue.
     /// </summary>
     public static PosJournal ForReceipt(PosReceipt receipt, IReadOnlyDictionary<PaymentMethod, PaymentTarget> targets)
     {
@@ -173,7 +178,7 @@ public sealed class PosJournal
 
         // Cash rounding: rounded up (more collected) is a credit on a sale; rounded down a debit. Mirrored for refunds.
         var rounding = receipt.RoundingAdjustment;
-        journal.Add(PostingRoles.SalesDiscount, null, sale ? Math.Max(0, -rounding) : Math.Max(0, rounding), sale ? Math.Max(0, rounding) : Math.Max(0, -rounding),
+        journal.Add(PostingRoles.CashRounding, null, sale ? Math.Max(0, -rounding) : Math.Max(0, rounding), sale ? Math.Max(0, rounding) : Math.Max(0, -rounding),
             description: "Cash rounding");
         return journal;
     }
@@ -182,7 +187,9 @@ public sealed class PosJournal
 public sealed record PosLineInput(Guid ProductId, Guid? VariantId, Guid? UomId, decimal Quantity, decimal DiscountPercent = 0, string? BatchNumber = null,
     IReadOnlyList<string>? Serials = null);
 
-public sealed record PosPaymentInput(string Method, decimal Amount, string? Reference = null);
+/// <param name="Currency">Foreign cash only: the currency of <paramref name="Amount"/> (converted at the business date's spot rate; change is
+/// given in the terminal currency). Null = the terminal currency.</param>
+public sealed record PosPaymentInput(string Method, decimal Amount, string? Reference = null, string? Currency = null);
 
 public sealed record PricedCart(IReadOnlyList<PosReceiptLine> Lines, bool TaxInclusive)
 {
@@ -359,7 +366,11 @@ public sealed record ShiftReportDto(
     IReadOnlyList<MethodTotalDto> Methods,
     decimal CashVariance,
     Guid? VarianceJournalId,
-    DateTime GeneratedAtUtc);
+    DateTime GeneratedAtUtc,
+    IReadOnlyList<ForeignCashDto>? ForeignCash = null);
+
+/// <summary>Foreign cash taken in the shift (net of refunds): what should be in the drawer in that currency, and its terminal-currency value.</summary>
+public sealed record ForeignCashDto(string Currency, decimal Amount, decimal TerminalCurrencyAmount);
 
 public sealed record ReceiptLineTaxDto(Guid TaxCodeId, string Code, decimal Rate, decimal Base, decimal Amount);
 
@@ -386,7 +397,7 @@ public sealed record ReceiptLineDto(
     string? BatchNumber,
     IReadOnlyList<string> Serials);
 
-public sealed record ReceiptPaymentDto(string Method, decimal Amount, string? Reference);
+public sealed record ReceiptPaymentDto(string Method, decimal Amount, string? Reference, string? ForeignCurrency = null, decimal? ForeignAmount = null, decimal? ExchangeRate = null);
 
 public sealed record ReceiptDto(
     Guid Id,
@@ -415,7 +426,9 @@ public sealed record ReceiptDto(
     IReadOnlyList<ReceiptLineDto> Lines,
     IReadOnlyList<ReceiptPaymentDto> Payments,
     bool Replayed = false,
-    Guid? SalespersonId = null);
+    Guid? SalespersonId = null,
+    bool IsOffline = false,
+    DateTime? OfflineCreatedAtUtc = null);
 
 /// <summary>The cart as the server prices it now (returned with 409 when the client's price version is stale).</summary>
 public sealed record RepricedCartDto(string PriceVersion, bool TaxInclusive, decimal NetTotal, decimal TaxTotal, decimal GrossTotal, IReadOnlyList<ReceiptLineDto> Lines);
@@ -474,7 +487,8 @@ public static class PosMapping
     public static ReceiptDto ToDto(PosReceipt r, bool replayed = false) => new(r.Id, r.Number, r.Kind.ToString(), r.Status.ToString(), r.TerminalId, r.ShiftId,
         r.ClientReceiptId, r.CustomerId, r.Currency, r.BusinessDate, r.PriceVersion, r.TaxInclusive, r.NetTotal, r.TaxTotal, r.GrossTotal, r.DiscountTotal,
         r.RoundingAdjustment, r.AmountDue, r.Tendered, r.Change, r.OriginalReceiptId, r.JournalId, r.CreatedAtUtc, r.Lines.Select(ToDto).ToList(),
-        r.Payments.Select(p => new ReceiptPaymentDto(p.Method.ToString(), p.Amount, p.Reference)).ToList(), replayed, r.SalespersonId);
+        r.Payments.Select(p => new ReceiptPaymentDto(p.Method.ToString(), p.Amount, p.Reference, p.ForeignCurrency, p.ForeignAmount, p.ExchangeRate)).ToList(), replayed,
+        r.SalespersonId, r.IsOffline, r.OfflineCreatedAtUtc);
 }
 
 internal static class DuplicateKey

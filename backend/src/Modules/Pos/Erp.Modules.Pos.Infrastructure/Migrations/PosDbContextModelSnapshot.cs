@@ -216,6 +216,9 @@ namespace Erp.Modules.Pos.Infrastructure.Migrations
                         .HasPrecision(19, 4)
                         .HasColumnType("decimal(19,4)");
 
+                    b.Property<bool>("IsOffline")
+                        .HasColumnType("bit");
+
                     b.Property<Guid?>("JournalId")
                         .HasColumnType("uniqueidentifier");
 
@@ -242,6 +245,10 @@ namespace Erp.Modules.Pos.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
+
+                    b.Property<DateTime?>("OfflineCreatedAtUtc")
+                        .HasPrecision(3)
+                        .HasColumnType("datetime2(3)");
 
                     b.Property<Guid?>("OriginalReceiptId")
                         .HasColumnType("uniqueidentifier");
@@ -377,6 +384,9 @@ namespace Erp.Modules.Pos.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<long>("OfflineAllocatedTo")
+                        .HasColumnType("bigint");
+
                     b.Property<Guid>("PriceListId")
                         .HasColumnType("uniqueidentifier");
 
@@ -493,6 +503,15 @@ namespace Erp.Modules.Pos.Infrastructure.Migrations
 
                             b1.Property<decimal>("Amount")
                                 .HasPrecision(19, 4);
+
+                            b1.Property<decimal?>("ExchangeRate")
+                                .HasPrecision(19, 8);
+
+                            b1.Property<decimal?>("ForeignAmount")
+                                .HasPrecision(19, 4);
+
+                            b1.Property<string>("ForeignCurrency")
+                                .HasMaxLength(3);
 
                             b1.Property<string>("Method")
                                 .IsRequired();

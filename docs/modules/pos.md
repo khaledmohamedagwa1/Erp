@@ -89,6 +89,7 @@ Expected amounts:
 
 - At least one payment; each amount must be > 0; the method must be known.
 - **Cash rounding** uses the currency's `CashRoundingIncrement`, rounding half away from zero. It applies only when every payment is cash; a card pays the exact amount.
+- **Foreign cash:** a payment may carry `currency` (cash only, `pos.foreign-currency-cash-only`). It is converted at the spot rate of the business date (`pos.rate-missing` when none) and rounded to the terminal currency's minor units; the payment keeps `foreignCurrency`, `foreignAmount` and `exchangeRate`. Change is always given in the terminal currency.
 - **Sale:**
   - Non-cash total must be ≤ amount due (`pos.overpaid-non-cash`).
   - Total tendered must be ≥ amount due (`pos.underpaid`).
@@ -112,17 +113,17 @@ Every receipt posts **atomically**, in the request's single transaction (ADR-006
 7. **Number** the receipt: gapless, per terminal (scope `pos.receipt:{terminalId}`), by fiscal year.
 8. **Stock:** for stockable lines, `IInventoryPostingService.PostAsync` with `PostJournal: true` and counter role `CostOfGoodsSold`.
    - A sale issues stock (`SalesIssue`). The inventory engine writes the COGS journal (Dr COGS / Cr Inventory, purpose `inventory`). The line keeps its cost and first movement.
-   - A refund returns stock (`SalesReturn`) with `CostSourceMovementId` = the sale line's cost movement, so stock comes back **at the original cost**.
+   - A refund returns stock (`SalesReturn`) with `CostSourceMovementId` = the sale line's cost movement, so stock comes back **at the original cost**; Inventory splits it across the sale line's batches/serials in proportion (see the inventory module).
 9. **Journal** (`IJournalPostingService`, source `pos`, purpose `receipt`, rate 1):
 
    | Sale | Debit | Credit |
    |---|---|---|
    | Cash net of change | Drawer: the Finance account's GL account, else role `CashAccount` | |
-   | Card / Wallet | Clearing account's GL account, else role `BankAccount` | |
+   | Card / Wallet | Configured bank account's GL account, else role `CardClearing` (1140) | |
    | Other | `BankAccount` | |
    | Goods / services net, per product posting group | | `SalesRevenue` / `ServiceRevenue` |
    | Tax, per tax code | | `OutputTax` |
-   | Cash rounding up / down | `SalesDiscount` (rounded down) | `SalesDiscount` (rounded up) |
+   | Cash rounding up / down | `CashRounding` (5430, rounded down) | `CashRounding` (rounded up) |
 
    A refund is the mirror image: Dr `SalesReturns` per posting group, Dr `OutputTax`; Cr the payment accounts; rounding mirrored. There is no AR line.
 10. Set the number and journal on the receipt and save. When refunding, the sale's refunded quantities and status are saved in the same transaction; the sale's rowversion stops two concurrent refunds over-refunding.
@@ -135,11 +136,10 @@ Any failure (insufficient stock, closed period, missing posting rule) rolls back
 1. Lock the shift.
 2. Compute the expected amount per method from the receipts.
 3. Record the counts and close.
-4. If the cash variance ≠ 0, post a journal (source `pos`, doc type `pos.shift`, purpose `over-short`):
-   - shortage: Dr `CashOverShort` / Cr drawer;
-   - overage: Dr drawer / Cr `CashOverShort`.
-
-Non-cash variances are reported but not posted: card and wallet settlements are reconciled in Finance.
+4. Post one journal for the variances (source `pos`, doc type `pos.shift`, purpose `over-short`):
+   - shortage: Dr `CashOverShort` / Cr the method's account; overage: the reverse;
+   - **cash** always (an uncounted drawer counts as 0);
+   - **card, wallet and other** only when that method was counted (e.g. from the terminal's settlement slip) — against `CardClearing` or the configured bank account. A method that is not counted is reported, not posted.
 
 ### X and Z reports
 
@@ -152,7 +152,8 @@ Both show:
 - net sales, tax, discounts and rounding, all net of refunds;
 - float, pay-ins and pay-outs;
 - per method: sales, refunds, expected, counted and variance;
-- the cash variance and its journal.
+- the cash variance and its journal;
+- foreign cash per currency (`foreignCash`: amount in that currency and its terminal-currency value).
 
 ## Idempotency and price versions
 
@@ -168,28 +169,19 @@ Both show:
   - A request without `priceVersion` is an online submission and takes server prices.
   - Client prices are never used.
 
-### Offline sync design (designed, not implemented)
+### Offline mode (server side)
 
-Only online submission and the idempotent resend are implemented. The design for offline terminals:
+1. **Snapshot:** the device caches `GET /terminals/{id}/catalog-snapshot` (products, units, tax categories, prices, barcodes, price version, cash rounding, minor units, maximum discount) and refreshes it when online.
+2. **Number range:** while online it reserves numbers with `POST /terminals/{id}/offline-range {size}` (1–10,000; device key required when bound). Ranges are consecutive per terminal; offline receipts are numbered `OFF-{terminal}-{n}` from them. The number becomes the receipt's legal number (unique per company).
+3. **Sync:** `POST /terminals/{id}/offline-sync {receipts:[{clientReceiptId, offlineNumber, createdAtUtc, expectedGross, customerId, lines, payments}]}` processes the receipts in creation order, **each in its own transaction**, and answers per receipt `Accepted` / `Replayed` / `Rejected` with conflicts:
+   - idempotent on (terminal, ClientReceiptId) — resending a batch is always safe;
+   - the receipt is dated on its creation date (`pos.offline-date-invalid` for a future date) and posted into the terminal's open shift (`pos.no-open-shift` otherwise — sync before closing);
+   - prices are recomputed by the server for that date; a different total is reported as `pos.price-changed` but the sale stands when the payments cover the server total (otherwise it is rejected with `pos.underpaid`);
+   - stock follows the inventory policy: without `AllowNegativeStock` a shortage rejects the receipt with `inventory.insufficient-stock` and nothing is posted;
+   - an unallocated number is rejected (`pos.offline-number-invalid`).
+4. Rejected receipts are left to a supervisor (fix stock or prices, then resend the same receipt).
 
-1. **Snapshot:** the terminal caches `GET /terminals/{id}/catalog-snapshot`:
-   - products, units and tax category;
-   - prices valid on the date, and barcodes;
-   - the price version;
-   - the cash rounding increment, minor units and maximum discount.
-   It refreshes the snapshot when online, for example every few minutes and at shift open.
-2. **Local queue:** offline, the terminal prices with the snapshot, prints a provisional receipt carrying its `ClientReceiptId` (a GUID generated on the device), and appends to a durable local queue (IndexedDB). The queue holds the receipt, the snapshot version and `expectedGross`.
-3. **Replay in order:** when back online the queue is sent FIFO to `POST /receipts`. Each item is resent until it gets a definitive answer:
-   - **201/200:** remove it and store the legal number.
-   - **409 stale price:** a supervisor accepts the repriced cart, or the terminal policy is `AcceptServerPrices`.
-   - **422 business error,** e.g. insufficient stock: park it for a supervisor.
-   Resends are always safe, because of the (terminal, ClientReceiptId) key.
-4. **What a real offline mode still needs:**
-   - Accept receipts for a shift that the server has since moved to Closing: sync before the count.
-   - Allow negative stock for POS issues by policy.
-   - Number receipts with a device-local provisional series mapped to the legal number on sync.
-   - Sign the queue with the device key.
-   These are not implemented.
+Not built: the device application itself (local queue, provisional printing), signing the queue with the device key, accepting receipts into a shift already closed.
 
 ## Security
 
@@ -231,6 +223,8 @@ All require authorization, an active company and the module.
 | POST | `/receipts` | sell | Idempotency-Key, `X-Pos-Device-Key` when registered; `{terminalId, clientReceiptId, priceVersion?, expectedGross?, customerId?, lines: [{productId, variantId?, uomId?, quantity, discountPercent?, batchNumber?, serials?}], payments: [{method, amount, reference?}]}`. Returns 201 (new), 200 (replayed) or 409 (stale price with `repriced`). |
 | GET | `/receipts/{id}` | read | |
 | POST | `/receipts/{id}/refund` | refund | Idempotency-Key, device key; `{clientReceiptId, lines: [{lineId, quantity}], payments?, terminalId?}`. Uses the open shift of `terminalId` (default: the sale's terminal), which must be in the same legal entity and currency. |
+| POST | `/terminals/{id}/offline-range` | sell | Idempotency-Key, device key; `{size}` → `{terminalId, prefix, from, to}` |
+| POST | `/terminals/{id}/offline-sync` | sell | device key; `{receipts: [...]}` → `{accepted, replayed, rejected, results: [{clientReceiptId, offlineNumber, status, receipt?, conflicts}]}` |
 
 Error codes:
 - `pos.terminal-not-found`, `pos.shift-not-found`, `pos.receipt-not-found`
@@ -246,13 +240,14 @@ Error codes:
 - `pos.invalid-state-transition`
 - `pos.invalid-quantity`, `pos.invalid-discount`, `pos.invalid-amount`, `pos.invalid-float`, `pos.invalid-count`, `pos.invalid-movement-kind`, `pos.invalid-code`, `pos.invalid-max-discount`, `pos.invalid-stale-price-policy`
 - `pos.lines-required`, `pos.payments-required`
+- `pos.foreign-currency-cash-only`, `pos.rate-missing`, `pos.invalid-offline-range`, `pos.offline-number-invalid`, `pos.offline-date-invalid`, `pos.price-changed` (offline conflict, informational)
 
 ## Decisions and limitations
 
-- **Cash rounding posts to `SalesDiscount`.** There is no dedicated cash-rounding posting role, and adding one would mean changing Accounting's role list and chart templates.
-- **One currency.** POS sells only in the legal entity's functional currency (rate 1). Foreign-currency tender is not supported.
+- **Cash rounding posts to `CashRounding` (5430)**; card and wallet takings without a configured bank account go to `CardClearing` (1140) until settled.
+- **Selling currency is the functional currency.** Prices, the journal and change are in the terminal currency; foreign *cash* is accepted at the day rate and converted on receipt (no FX gain/loss is booked on the drawer — the foreign notes are valued at the rate of the day they were taken; their later deposit is a Finance matter). The shift count is in terminal-currency value; the X/Z report lists foreign cash per currency to help counting.
 - **Pay-in and pay-out do not post a journal** (same GL cash account as the safe). The Finance cash-account balance does not include POS takings until they are deposited through Finance.
-- **Refund cost uses the sale line's first cost movement**, as in Sales returns. A line that was issued from several FIFO layers or batches comes back at the first layer's cost.
+- **Refunds restock what the sale line issued**, split across its batches/serials by Inventory. A FIFO line without batches is one movement and returns at its blended cost.
 - **The receipt journal is per receipt,** not summarised per shift. This keeps postings atomic and idempotent per receipt.
 - **Cashier assignment is not enforced.** The cashier is the user who opened the shift, and receipts record the submitting user, but any user with `pos.sell` may sell on an open shift.
-- **The offline mode is designed above but not implemented.**
+- **Offline mode:** number ranges and batch sync are implemented server-side; the device application is not part of this repository.

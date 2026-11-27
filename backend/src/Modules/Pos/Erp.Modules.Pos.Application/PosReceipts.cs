@@ -23,8 +23,50 @@ public sealed class ReceiptPosting(
     IInventoryPostingService inventory,
     IJournalPostingService journals,
     IDocumentNumberGenerator numbers,
-    ICurrencyQueries currencies)
+    ICurrencyQueries currencies,
+    IExchangeRateProvider rates)
 {
+    /// <summary>
+    /// Parses payments; foreign cash is converted to the terminal currency at the business date's spot rate (rounded to the currency's
+    /// minor units) and keeps its original currency, amount and rate on the payment.
+    /// </summary>
+    public async Task<Result<IReadOnlyList<(PaymentInput Input, PosPayment Payment)>>> ConvertPaymentsAsync(
+        PosTerminal terminal, IReadOnlyList<PosPaymentInput> inputs, DateOnly date, int decimals, CancellationToken ct)
+    {
+        var result = new List<(PaymentInput, PosPayment)>();
+        foreach (var payment in inputs)
+        {
+            var method = PosPaymentMethods.Parse(payment.Method);
+            if (method.IsFailure)
+            {
+                return method.Error;
+            }
+
+            if (string.IsNullOrWhiteSpace(payment.Currency) || string.Equals(payment.Currency, terminal.Currency, StringComparison.OrdinalIgnoreCase))
+            {
+                result.Add((new PaymentInput(method.Value, payment.Amount), new PosPayment(method.Value, payment.Amount, payment.Reference)));
+                continue;
+            }
+
+            if (method.Value != PaymentMethod.Cash)
+            {
+                return PosAppErrors.ForeignCurrencyCashOnly;
+            }
+
+            var currency = payment.Currency.Trim().ToUpperInvariant();
+            var rate = await rates.GetRateAsync(currency, terminal.Currency, date, ExchangeRateKind.Spot, ct);
+            if (rate is not > 0)
+            {
+                return PosAppErrors.RateMissing;
+            }
+
+            var converted = PosMath.Round(payment.Amount * rate.Value, decimals);
+            result.Add((new PaymentInput(method.Value, converted), new PosPayment(method.Value, converted, payment.Reference, currency, payment.Amount, rate.Value)));
+        }
+
+        return result;
+    }
+
     public async Task<PosReceipt?> FindAsync(Guid terminalId, Guid clientReceiptId, CancellationToken ct) =>
         await db.Receipts.AsNoTracking().FirstOrDefaultAsync(r => r.TerminalId == terminalId && r.ClientReceiptId == clientReceiptId, ct);
 
@@ -68,11 +110,11 @@ public sealed class ReceiptPosting(
     }
 
     /// <summary>Number per terminal, stock movements (with the COGS journal), the receipt journal. Returns a failure to roll back.</summary>
-    public async Task<Result> PostAsync(PosTerminal terminal, PosReceipt receipt, IReadOnlyDictionary<Guid, Guid?> costSources, CancellationToken ct)
+    public async Task<Result> PostAsync(PosTerminal terminal, PosReceipt receipt, IReadOnlyDictionary<Guid, Guid?> costSources, CancellationToken ct, string? offlineNumber = null)
     {
         var sale = receipt.Kind == ReceiptKind.Sale;
         var docType = sale ? PosDocumentTypes.Receipt : PosDocumentTypes.Refund;
-        var number = await numbers.NextAsync(new NumberScope(receipt.CompanyId, $"{docType}:{terminal.Id:N}", sale ? terminal.ReceiptPrefix : "PRF",
+        var number = offlineNumber ?? await numbers.NextAsync(new NumberScope(receipt.CompanyId, $"{docType}:{terminal.Id:N}", sale ? terminal.ReceiptPrefix : "PRF",
             LegalEntityId: receipt.LegalEntityId, BranchCode: terminal.Code, FiscalYear: receipt.BusinessDate.Year), ct);
 
         var stockLines = receipt.Lines.Where(l => l.IsStockable).ToList();
@@ -206,16 +248,10 @@ public sealed class SubmitReceiptHandler(
                 cart.Value.Gross, lines.Select(PosMapping.ToDto).ToList()));
         }
 
-        var payments = new List<(PaymentInput Input, string? Reference)>();
-        foreach (var payment in c.Payments ?? [])
+        var payments = await posting.ConvertPaymentsAsync(terminal, c.Payments ?? [], date, decimals, ct);
+        if (payments.IsFailure)
         {
-            var method = PosPaymentMethods.Parse(payment.Method);
-            if (method.IsFailure)
-            {
-                return method.Error;
-            }
-
-            payments.Add((new PaymentInput(method.Value, payment.Amount), payment.Reference));
+            return payments.Error;
         }
 
         var salesperson = await salespersons.ResolveAsync(c.SalespersonId, customerId, user.UserId, ct);
@@ -230,8 +266,8 @@ public sealed class SubmitReceiptHandler(
         try
         {
             receipt.SetLines(cart.Value.Lines);
-            var settlement = PosMath.SettleSale(receipt.GrossTotal, payments.Select(p => p.Input).ToList(), increment, decimals);
-            receipt.Settle(settlement, payments.Select(p => new PosPayment(p.Input.Method, p.Input.Amount, p.Reference)));
+            var settlement = PosMath.SettleSale(receipt.GrossTotal, payments.Value.Select(p => p.Input).ToList(), increment, decimals);
+            receipt.Settle(settlement, payments.Value.Select(p => p.Payment));
         }
         catch (DomainException ex)
         {
@@ -246,6 +282,177 @@ public sealed class SubmitReceiptHandler(
         var posted = await posting.PostAsync(terminal, receipt, new Dictionary<Guid, Guid?>(), ct);
         return posted.IsFailure ? posted.Error : new ReceiptOutcome(PosMapping.ToDto(receipt), null);
     }
+}
+
+/// <summary>A receipt the device created while offline (numbered from the terminal's offline range, dated when it was made).</summary>
+public sealed record OfflineReceiptInput(
+    Guid ClientReceiptId,
+    string OfflineNumber,
+    DateTime CreatedAtUtc,
+    decimal? ExpectedGross,
+    Guid? CustomerId,
+    IReadOnlyList<PosLineInput> Lines,
+    IReadOnlyList<PosPaymentInput> Payments);
+
+public sealed record OfflineConflictDto(string Code, string Message);
+
+/// <summary>Accepted (posted now), Replayed (posted before), or Rejected (nothing posted; resolve the conflicts and resend).</summary>
+public sealed record OfflineReceiptResultDto(Guid ClientReceiptId, string OfflineNumber, string Status, ReceiptDto? Receipt, IReadOnlyList<OfflineConflictDto> Conflicts);
+
+public sealed record OfflineRangeDto(Guid TerminalId, string Prefix, long From, long To);
+
+/// <summary>Reserves a block of receipt numbers for the device to use while offline.</summary>
+public sealed record AllocateOfflineRangeCommand(Guid TerminalId, int Size, string? DeviceKey = null) : ICommand<OfflineRangeDto>;
+
+public sealed class AllocateOfflineRangeHandler(IPosDbContext db) : ICommandHandler<AllocateOfflineRangeCommand, OfflineRangeDto>
+{
+    public async Task<Result<OfflineRangeDto>> Handle(AllocateOfflineRangeCommand c, CancellationToken ct)
+    {
+        var terminal = await db.Terminals.FirstOrDefaultAsync(t => t.Id == c.TerminalId, ct);
+        if (terminal is null)
+        {
+            return PosAppErrors.TerminalNotFound;
+        }
+
+        if (!PosDevice.Accepts(terminal, c.DeviceKey))
+        {
+            return PosAppErrors.DeviceKeyInvalid;
+        }
+
+        try
+        {
+            var (from, to) = terminal.AllocateOfflineRange(c.Size);
+            await db.SaveChangesAsync(ct);
+            return new OfflineRangeDto(terminal.Id, terminal.OfflinePrefix, from, to);
+        }
+        catch (DomainException ex)
+        {
+            return ex.Error;
+        }
+    }
+}
+
+/// <summary>
+/// One offline receipt of a sync batch (each runs in its own transaction). Idempotent on (terminal, ClientReceiptId). Prices are
+/// recomputed by the server for the receipt's date; a different total is reported as a <c>price-changed</c> conflict but the sale
+/// stands as long as the payments cover the server total. Stock follows the inventory policy: without negative stock allowed, a
+/// shortage rejects the receipt (<c>inventory.insufficient-stock</c>) and nothing is posted.
+/// </summary>
+public sealed record SubmitOfflineReceiptCommand(Guid TerminalId, OfflineReceiptInput Receipt, string? DeviceKey = null) : ICommand<OfflineReceiptResultDto>;
+
+public sealed class SubmitOfflineReceiptHandler(
+    IPosDbContext db,
+    ReceiptPosting posting,
+    PosPricing pricing,
+    IPriceListSnapshotQueries priceLists,
+    IPartyQueries parties,
+    ICurrentUser user,
+    IClock clock) : ICommandHandler<SubmitOfflineReceiptCommand, OfflineReceiptResultDto>
+{
+    public async Task<Result<OfflineReceiptResultDto>> Handle(SubmitOfflineReceiptCommand c, CancellationToken ct)
+    {
+        var input = c.Receipt;
+        var terminal = await db.Terminals.AsNoTracking().FirstOrDefaultAsync(t => t.Id == c.TerminalId, ct);
+        if (terminal is null)
+        {
+            return PosAppErrors.TerminalNotFound;
+        }
+
+        if (!PosDevice.Accepts(terminal, c.DeviceKey))
+        {
+            return PosAppErrors.DeviceKeyInvalid;
+        }
+
+        if (await posting.FindAsync(terminal.Id, input.ClientReceiptId, ct) is { } existing)
+        {
+            return new OfflineReceiptResultDto(input.ClientReceiptId, input.OfflineNumber, "Replayed", PosMapping.ToDto(existing, replayed: true), []);
+        }
+
+        if (!terminal.IsAllocatedOfflineNumber(input.OfflineNumber))
+        {
+            return Rejected(input, PosAppErrors.OfflineNumberInvalid);
+        }
+
+        var date = DateOnly.FromDateTime(input.CreatedAtUtc);
+        if (date > DateOnly.FromDateTime(clock.UtcNow))
+        {
+            return Rejected(input, PosAppErrors.OfflineDateInvalid);
+        }
+
+        var shift = await posting.LockOpenShiftAsync(terminal, ct);
+        if (shift.IsFailure)
+        {
+            return Rejected(input, shift.Error);
+        }
+
+        if (await posting.FindAsync(terminal.Id, input.ClientReceiptId, ct) is { } committed)
+        {
+            return new OfflineReceiptResultDto(input.ClientReceiptId, input.OfflineNumber, "Replayed", PosMapping.ToDto(committed, replayed: true), []);
+        }
+
+        var customerId = terminal.DefaultCustomerId;
+        if (input.CustomerId is { } requested)
+        {
+            if (await parties.GetCustomerAsync(requested, ct) is not { IsActive: true })
+            {
+                return Rejected(input, PosAppErrors.CustomerNotFound);
+            }
+
+            customerId = requested;
+        }
+
+        var (decimals, increment) = await posting.CurrencyAsync(terminal.Currency, ct);
+        var cart = await pricing.PriceAsync(terminal, date, input.Lines ?? [], decimals, ct);
+        if (cart.IsFailure)
+        {
+            return Rejected(input, cart.Error);
+        }
+
+        var conflicts = new List<OfflineConflictDto>();
+        if (input.ExpectedGross is { } expected && expected != cart.Value.Gross)
+        {
+            conflicts.Add(new OfflineConflictDto("pos.price-changed", $"The device charged {expected}; current prices total {cart.Value.Gross}."));
+        }
+
+        var payments = await posting.ConvertPaymentsAsync(terminal, input.Payments ?? [], date, decimals, ct);
+        if (payments.IsFailure)
+        {
+            return Rejected(input, payments.Error, conflicts);
+        }
+
+        var version = await priceLists.GetVersionAsync(terminal.PriceListId, ct) ?? string.Empty;
+        var receipt = new PosReceipt(terminal.CompanyId, terminal.LegalEntityId, terminal.BranchId, terminal.Id, shift.Value.Id, terminal.WarehouseId, input.ClientReceiptId,
+            ReceiptKind.Sale, customerId, terminal.Currency, terminal.PriceListId, version, cart.Value.TaxInclusive, date, user.UserId, clock.UtcNow, null);
+        receipt.MarkOffline(input.CreatedAtUtc);
+        try
+        {
+            receipt.SetLines(cart.Value.Lines);
+            var settlement = PosMath.SettleSale(receipt.GrossTotal, payments.Value.Select(p => p.Input).ToList(), increment, decimals);
+            receipt.Settle(settlement, payments.Value.Select(p => p.Payment));
+        }
+        catch (DomainException ex)
+        {
+            return Rejected(input, ex.Error, conflicts);
+        }
+
+        if (await posting.ClaimAsync(receipt, ct) is { } winner)
+        {
+            return new OfflineReceiptResultDto(input.ClientReceiptId, input.OfflineNumber, "Replayed", PosMapping.ToDto(winner, replayed: true), []);
+        }
+
+        var posted = await posting.PostAsync(terminal, receipt, new Dictionary<Guid, Guid?>(), ct, input.OfflineNumber);
+        if (posted.IsFailure)
+        {
+            // The pipeline rolls back on a failed result; the receipt row claimed above goes with it.
+            return posted.Error;
+        }
+
+        return new OfflineReceiptResultDto(input.ClientReceiptId, input.OfflineNumber, "Accepted", PosMapping.ToDto(receipt), conflicts);
+    }
+
+    private static Result<OfflineReceiptResultDto> Rejected(OfflineReceiptInput input, Error error, IReadOnlyList<OfflineConflictDto>? earlier = null) =>
+        new OfflineReceiptResultDto(input.ClientReceiptId, input.OfflineNumber, "Rejected", null,
+            [.. earlier ?? [], new OfflineConflictDto(error.Code, error.Message)]);
 }
 
 public sealed record RefundLineInput(Guid LineId, decimal Quantity);
