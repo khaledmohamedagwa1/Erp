@@ -8,6 +8,7 @@
     <ProjectReference Include="../../Modules/Identity/Erp.Modules.Identity.Infrastructure/Erp.Modules.Identity.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Configuration/Erp.Modules.Configuration.Infrastructure/Erp.Modules.Configuration.Infrastructure.csproj" />
     <ProjectReference Include="../../Modules/Parties/Erp.Modules.Parties.Infrastructure/Erp.Modules.Parties.Infrastructure.csproj" />
+    <ProjectReference Include="../../Modules/Tax/Erp.Modules.Tax.Infrastructure/Erp.Modules.Tax.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Serilog.AspNetCore" />

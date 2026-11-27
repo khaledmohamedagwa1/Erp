@@ -12,6 +12,8 @@
     <ProjectReference Include="../../src/Modules/Configuration/Erp.Modules.Configuration.Application/Erp.Modules.Configuration.Application.csproj" />
     <ProjectReference Include="../../src/Modules/Parties/Erp.Modules.Parties.Domain/Erp.Modules.Parties.Domain.csproj" />
     <ProjectReference Include="../../src/Modules/Parties/Erp.Modules.Parties.Application/Erp.Modules.Parties.Application.csproj" />
+    <ProjectReference Include="../../src/Modules/Tax/Erp.Modules.Tax.Domain/Erp.Modules.Tax.Domain.csproj" />
+    <ProjectReference Include="../../src/Modules/Tax/Erp.Modules.Tax.Application/Erp.Modules.Tax.Application.csproj" />
     <ProjectReference Include="../../src/BuildingBlocks/Erp.Infrastructure/Erp.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>

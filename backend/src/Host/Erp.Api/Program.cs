@@ -3,6 +3,7 @@ using Erp.Infrastructure.Database;
 using Erp.Infrastructure.Outbox;
 using Erp.Infrastructure.Tenancy;
 using Erp.Modules.Configuration.Infrastructure;
+using Erp.Modules.Tax.Infrastructure;
 using Erp.Modules.Identity.Infrastructure;
 using Erp.Modules.Organization.Infrastructure;
 using Erp.Modules.Parties.Infrastructure;
@@ -32,7 +33,7 @@ builder.Services.AddSerilog((services, logger) =>
 });
 
 // ---- Modules: the platform is composed from these (order = migration order is set per module) ----
-IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule(), new PartiesModule()];
+IErpModule[] modules = [new OrganizationModule(), new IdentityModule(), new ConfigurationModule(), new PartiesModule(), new TaxModule()];
 builder.Services.AddErpPlatform(builder.Configuration, modules);
 
 // ---- Process role: api | worker | all (same image, different responsibilities) ----
