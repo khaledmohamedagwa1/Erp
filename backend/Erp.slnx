@@ -47,6 +47,12 @@
     <Project Path="src/Modules/Inventory/Erp.Modules.Inventory.Domain/Erp.Modules.Inventory.Domain.csproj" />
     <Project Path="src/Modules/Inventory/Erp.Modules.Inventory.Infrastructure/Erp.Modules.Inventory.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/src/Modules/FixedAssets/">
+    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Application/Erp.Modules.FixedAssets.Application.csproj" />
+    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Contracts/Erp.Modules.FixedAssets.Contracts.csproj" />
+    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Domain/Erp.Modules.FixedAssets.Domain.csproj" />
+    <Project Path="src/Modules/FixedAssets/Erp.Modules.FixedAssets.Infrastructure/Erp.Modules.FixedAssets.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Modules/Manufacturing/">
     <Project Path="src/Modules/Manufacturing/Erp.Modules.Manufacturing.Application/Erp.Modules.Manufacturing.Application.csproj" />
     <Project Path="src/Modules/Manufacturing/Erp.Modules.Manufacturing.Contracts/Erp.Modules.Manufacturing.Contracts.csproj" />

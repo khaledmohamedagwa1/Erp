@@ -11,7 +11,7 @@ namespace Erp.ArchitectureTests;
 
 public class ArchitectureTests
 {
-    private static readonly string[] Modules = ["Organization", "Identity", "Configuration", "Parties", "Tax", "Catalog", "Accounting", "Finance", "Inventory", "Workflow", "Manufacturing", "Procurement", "Sales"];
+    private static readonly string[] Modules = ["Organization", "Identity", "Configuration", "Parties", "Tax", "Catalog", "Accounting", "Finance", "Inventory", "Workflow", "Manufacturing", "Procurement", "Sales", "FixedAssets"];
 
     private static Assembly Load(string name) => Assembly.Load(name);
 
@@ -75,6 +75,7 @@ public class ArchitectureTests
         typeof(Erp.Modules.Inventory.Infrastructure.InventoryDbContextFactory),
         typeof(Erp.Modules.Workflow.Infrastructure.WorkflowDbContextFactory),
         typeof(Erp.Modules.Manufacturing.Infrastructure.ManufacturingDbContextFactory),
+        typeof(Erp.Modules.FixedAssets.Infrastructure.FixedAssetsDbContextFactory),
         typeof(Erp.Modules.Procurement.Infrastructure.ProcurementDbContextFactory),
         typeof(Erp.Modules.Sales.Infrastructure.SalesDbContextFactory),
         typeof(Erp.Modules.Inventory.Infrastructure.InventoryDbContextFactory));
